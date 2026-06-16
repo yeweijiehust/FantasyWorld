@@ -9,17 +9,23 @@ on:
       - main
 
 jobs:
-  dependency-review:
-    if: github.event_name == 'pull_request'
+  dependency-audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/dependency-review-action@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm audit --prod --audit-level high
   repository-hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: |
           test ! -f .env
-          ! git ls-files | grep -E '(^|/)\.env($|\.)'
+          ! git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v -E '(^|/)\.env\.example$'
           ! git grep -I -n -E 'sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH) PRIVATE KEY' -- .
