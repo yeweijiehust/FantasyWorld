@@ -11,6 +11,9 @@ import type {
 } from "@fantasy-world/shared";
 
 export type FantasyWorldStore = {
+  createSession(): string | Promise<string>;
+  hasSession(sessionId: string | undefined): boolean | Promise<boolean>;
+  deleteSession(sessionId: string): void | Promise<void>;
   getModelConfig(): ModelConfig | Promise<ModelConfig>;
   updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): ModelConfig | Promise<ModelConfig>;
   listSaves(): SaveListItem[] | Promise<SaveListItem[]>;

@@ -60,6 +60,7 @@ export const saveGenerationJobs = pgTable("save_generation_jobs", {
 export const modelConfigs = pgTable("model_configs", {
   id: text("id").primaryKey(),
   data: jsonb("data").notNull(),
+  apiKeyCiphertext: text("api_key_ciphertext"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
 

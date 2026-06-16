@@ -19,6 +19,7 @@ import type {
   WorldMemory
 } from "@fantasy-world/shared";
 import * as dbSchema from "../db/schema.js";
+import { encryptSecret } from "../security/secrets.js";
 import { buildSave, defaultModelConfig, id, now, renderTurnEvent } from "./prototype-store.js";
 import type { FantasyWorldStore } from "./types.js";
 
@@ -26,49 +27,93 @@ type Database = NodePgDatabase<typeof dbSchema>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 const modelConfigId = "global";
+const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
 export class DatabaseStore implements FantasyWorldStore {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly encryptionKey: string
+  ) {}
+
+  async createSession(): Promise<string> {
+    const sessionId = id("session");
+    const createdAt = new Date();
+
+    await this.db.insert(dbSchema.sessions).values({
+      id: sessionId,
+      createdAt,
+      expiresAt: new Date(createdAt.getTime() + sessionTtlMs)
+    });
+
+    return sessionId;
+  }
+
+  async hasSession(sessionId: string | undefined): Promise<boolean> {
+    if (!sessionId) {
+      return false;
+    }
+
+    const row = await this.db.query.sessions.findFirst({
+      where: and(eq(dbSchema.sessions.id, sessionId), gt(dbSchema.sessions.expiresAt, new Date()))
+    });
+
+    return Boolean(row);
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.db.delete(dbSchema.sessions).where(eq(dbSchema.sessions.id, sessionId));
+  }
 
   async getModelConfig(): Promise<ModelConfig> {
     const row = await this.db.query.modelConfigs.findFirst({
       where: eq(dbSchema.modelConfigs.id, modelConfigId)
     });
 
-    return row ? structuredClone(row.data as ModelConfig) : structuredClone(defaultModelConfig);
+    if (!row) {
+      return structuredClone(defaultModelConfig);
+    }
+
+    const data = row.data as ModelConfig;
+
+    return structuredClone({
+      ...data,
+      hasApiKey: Boolean(row.apiKeyCiphertext) || data.hasApiKey
+    });
   }
 
   async updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): Promise<ModelConfig> {
+    const existing = await this.db.query.modelConfigs.findFirst({
+      where: eq(dbSchema.modelConfigs.id, modelConfigId)
+    });
     const current = await this.getModelConfig();
     const { apiKey, ...modelInput } = input;
+    const cleanApiKey = apiKey?.trim();
     const next: ModelConfig = {
       ...current,
       ...modelInput,
-      hasApiKey: Boolean(apiKey) || current.hasApiKey,
+      hasApiKey: Boolean(cleanApiKey) || Boolean(existing?.apiKeyCiphertext) || current.hasApiKey,
       supportsJsonMode: true,
       supportsUsage: true,
       supportsStream: false
     };
+    const apiKeyCiphertext = cleanApiKey ? encryptSecret(cleanApiKey, this.encryptionKey) : existing?.apiKeyCiphertext;
 
-    if (apiKey) {
-      next.apiKeyTail = apiKey.slice(-4);
+    if (cleanApiKey) {
+      next.apiKeyTail = cleanApiKey.slice(-4);
     } else if (current.apiKeyTail) {
       next.apiKeyTail = current.apiKeyTail;
     }
 
-    const existing = await this.db.query.modelConfigs.findFirst({
-      where: eq(dbSchema.modelConfigs.id, modelConfigId)
-    });
-
     if (existing) {
       await this.db
         .update(dbSchema.modelConfigs)
-        .set({ data: next, updatedAt: new Date() })
+        .set({ data: next, apiKeyCiphertext: apiKeyCiphertext ?? null, updatedAt: new Date() })
         .where(eq(dbSchema.modelConfigs.id, modelConfigId));
     } else {
       await this.db.insert(dbSchema.modelConfigs).values({
         id: modelConfigId,
         data: next,
+        apiKeyCiphertext: apiKeyCiphertext ?? null,
         updatedAt: new Date()
       });
     }

@@ -101,7 +101,7 @@ export function buildApp(options: BuildAppOptions) {
       return;
     }
 
-    if (request.cookies.fw_session !== "authenticated") {
+    if (!(await store.hasSession(request.cookies.fw_session))) {
       return sendError(reply, 401, "unauthorized", "Login required");
     }
   });
@@ -127,7 +127,7 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    (request) => ({ authenticated: request.cookies.fw_session === "authenticated" })
+    async (request) => ({ authenticated: await store.hasSession(request.cookies.fw_session) })
   );
 
   app.post(
@@ -146,7 +146,9 @@ export function buildApp(options: BuildAppOptions) {
         return sendError(reply, 401, "invalid_credentials", "Invalid password");
       }
 
-      reply.setCookie("fw_session", "authenticated", {
+      const sessionId = await store.createSession();
+
+      reply.setCookie("fw_session", sessionId, {
         httpOnly: true,
         sameSite: "lax",
         secure: options.env.nodeEnv === "production",
@@ -166,7 +168,13 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    async (_request, reply) => {
+    async (request, reply) => {
+      const sessionId = request.cookies.fw_session;
+
+      if (sessionId) {
+        await store.deleteSession(sessionId);
+      }
+
       reply.clearCookie("fw_session", { path: "/" });
       return { authenticated: false };
     }

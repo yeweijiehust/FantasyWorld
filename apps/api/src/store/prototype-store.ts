@@ -26,16 +26,43 @@ export const defaultModelConfig: ModelConfig = {
   supportsUsage: true,
   supportsStream: false
 };
+const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
 export class PrototypeStore implements FantasyWorldStore {
   private readonly saves = new Map<string, Save>();
   private readonly generationJobs = new Map<string, SaveGenerationJob>();
   private readonly turnJobs = new Map<string, TurnJob>();
   private readonly rollbackSnapshots = new Map<string, Save[]>();
+  private readonly sessions = new Map<string, number>();
   private modelConfig: ModelConfig = defaultModelConfig;
 
   getSession() {
     return { authenticated: true };
+  }
+
+  createSession() {
+    const sessionId = id("session");
+    this.sessions.set(sessionId, Date.now() + sessionTtlMs);
+    return sessionId;
+  }
+
+  hasSession(sessionId: string | undefined) {
+    if (!sessionId) {
+      return false;
+    }
+
+    const expiresAt = this.sessions.get(sessionId);
+
+    if (!expiresAt || expiresAt <= Date.now()) {
+      this.sessions.delete(sessionId);
+      return false;
+    }
+
+    return true;
+  }
+
+  deleteSession(sessionId: string) {
+    this.sessions.delete(sessionId);
   }
 
   getModelConfig() {
