@@ -23,7 +23,8 @@ import Fastify, { type FastifyError } from "fastify";
 import { Type } from "typebox";
 import { verifyPassword } from "./auth/password.js";
 import type { AppEnv } from "./config/env.js";
-import { prototypeStore, type PrototypeStore } from "./store/prototype-store.js";
+import { prototypeStore } from "./store/prototype-store.js";
+import type { FantasyWorldStore } from "./store/types.js";
 
 const ParamsWithIdSchema = Type.Object({ id: Type.String() });
 const GenerationParamsSchema = Type.Object({ id: Type.String() });
@@ -51,7 +52,7 @@ const SavePatchSchema = Type.Partial(
 
 type BuildAppOptions = {
   env: AppEnv;
-  store?: PrototypeStore;
+  store?: FantasyWorldStore;
 };
 
 export function buildApp(options: BuildAppOptions) {
@@ -180,7 +181,7 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    () => store.getModelConfig()
+    async () => store.getModelConfig()
   );
 
   app.put(
@@ -193,7 +194,7 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    (request) => store.updateModelConfig(request.body)
+    async (request) => store.updateModelConfig(request.body)
   );
 
   app.get(
@@ -205,7 +206,7 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    () => store.listSaves()
+    async () => store.listSaves()
   );
 
   app.get(
@@ -220,7 +221,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.getSave(request.params.id);
+      const save = await store.getSave(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -238,7 +239,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.patchSave(request.params.id, request.body);
+      const save = await store.patchSave(request.params.id, request.body);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -255,7 +256,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.getSave(request.params.id);
+      const save = await store.getSave(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -272,7 +273,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.getSave(request.params.id);
+      const save = await store.getSave(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -289,7 +290,7 @@ export function buildApp(options: BuildAppOptions) {
     },
     async (request, reply) => {
       reply.code(201);
-      return store.importSave(request.body);
+      return await store.importSave(request.body);
     }
   );
 
@@ -305,7 +306,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.rollbackSave(request.params.id);
+      const save = await store.rollbackSave(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "No rollback snapshot available");
     }
   );
@@ -323,7 +324,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.patchSave(request.params.id, { settings: request.body });
+      const save = await store.patchSave(request.params.id, { settings: request.body });
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -341,7 +342,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.patchCharacter(request.params.id, request.params.characterId, request.body);
+      const save = await store.patchCharacter(request.params.id, request.params.characterId, request.body);
       return save ?? sendError(reply, 404, "not_found", "Character not found");
     }
   );
@@ -359,7 +360,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.patchSave(request.params.id, { worldMemory: request.body });
+      const save = await store.patchSave(request.params.id, { worldMemory: request.body });
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -376,7 +377,7 @@ export function buildApp(options: BuildAppOptions) {
     },
     async (request, reply) => {
       reply.code(201);
-      return store.createGenerationJob(request.body);
+      return await store.createGenerationJob(request.body);
     }
   );
 
@@ -388,7 +389,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = store.getGenerationJob(request.params.id);
+      const job = await store.getGenerationJob(request.params.id);
       return sendSse(reply, job ?? { error: { code: "not_found", message: "Generation job not found" } });
     }
   );
@@ -405,7 +406,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.acceptGenerationJob(request.params.id);
+      const save = await store.acceptGenerationJob(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
   );
@@ -423,7 +424,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = store.createTurnJob(request.params.id, request.body);
+      const job = await store.createTurnJob(request.params.id, request.body);
 
       if (!job) {
         return sendError(reply, 404, "not_found", "Save not found");
@@ -442,7 +443,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = store.getTurnJob(request.params.id);
+      const job = await store.getTurnJob(request.params.id);
       return sendSse(reply, job ?? { error: { code: "not_found", message: "Turn job not found" } });
     }
   );
@@ -459,7 +460,7 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = store.acceptTurn(request.params.id);
+      const save = await store.acceptTurn(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Turn not found");
     }
   );

@@ -13,11 +13,12 @@ import type {
   Turn,
   TurnJob
 } from "@fantasy-world/shared";
+import type { FantasyWorldStore } from "./types.js";
 
-const now = () => new Date().toISOString();
-const id = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
+export const now = () => new Date().toISOString();
+export const id = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
 
-const defaultModelConfig: ModelConfig = {
+export const defaultModelConfig: ModelConfig = {
   baseUrl: "https://api.openai.com/v1",
   model: "gpt-4.1-mini",
   hasApiKey: false,
@@ -26,7 +27,7 @@ const defaultModelConfig: ModelConfig = {
   supportsStream: false
 };
 
-export class PrototypeStore {
+export class PrototypeStore implements FantasyWorldStore {
   private readonly saves = new Map<string, Save>();
   private readonly generationJobs = new Map<string, SaveGenerationJob>();
   private readonly turnJobs = new Map<string, TurnJob>();
@@ -81,7 +82,7 @@ export class PrototypeStore {
   }
 
   createGenerationJob(input: CreateSaveInput): SaveGenerationJob {
-    const save = this.buildSave(input);
+    const save = buildSave(input);
     const job: SaveGenerationJob = {
       id: id("generation_job"),
       status: "needs_review",
@@ -194,7 +195,7 @@ export class PrototypeStore {
     const involved = save.characters.slice(0, Math.min(2, save.characters.length));
     const instruction = input.gmInstruction?.trim();
     const eventTitle = instruction ? "GM 指令改变了局势" : "世界自行推进";
-    const eventBody = this.renderTurnEvent(save, involved, location, instruction);
+    const eventBody = renderTurnEvent(save, involved, location, instruction);
     const event =
       location?.id !== undefined
         ? {
@@ -311,91 +312,89 @@ export class PrototypeStore {
     const job = this.turnJobs.get(jobId);
     return job ? structuredClone(job) : undefined;
   }
-
-  private buildSave(input: CreateSaveInput): Save {
-    const createdAt = now();
-    const location: Location = {
-      id: id("location"),
-      name: input.settings.language === "zh" ? "边境港口" : "Frontier Harbor",
-      description:
-        input.settings.language === "zh"
-          ? "一座夹在贸易、谣言和旧王国阴影之间的港口。"
-          : "A harbor caught between trade, rumor, and the shadow of an old kingdom.",
-      status: input.settings.language === "zh" ? "平静但暗流涌动" : "Calm with quiet pressure underneath"
-    };
-    const seeds = input.characterSeeds.length > 0 ? input.characterSeeds : ["守望者", "流亡继承人", "走私船长"];
-    const characters = seeds.slice(0, 8).map<Character>((seed, index) => ({
-      id: id("character"),
-      name: seed || `Character ${index + 1}`,
-      profile:
-        input.settings.language === "zh"
-          ? `${seed} 被卷入了 ${input.name} 的核心冲突。`
-          : `${seed} has been pulled into the central conflict of ${input.name}.`,
-      personality: input.settings.language === "zh" ? "谨慎、执着、会隐藏真实动机" : "Careful, driven, and private",
-      longTermGoal: input.settings.language === "zh" ? "保护自己珍视的东西" : "Protect what matters most",
-      shortTermGoal: input.settings.language === "zh" ? "弄清当前局势的真正威胁" : "Understand the immediate threat",
-      locationId: location.id,
-      status: input.settings.language === "zh" ? "可行动" : "Available",
-      secrets: [input.settings.language === "zh" ? "掌握一条尚未公开的线索" : "Knows one unrevealed lead"],
-      privateMemory: [
-        input.settings.language === "zh" ? "记得世界刚刚开始运转" : "Remembers the world beginning to move"
-      ]
-    }));
-    const relationships = characters.slice(1).map<Relationship>((character, index) => ({
-      id: id("relationship"),
-      sourceCharacterId: characters[0]?.id ?? character.id,
-      targetCharacterId: character.id,
-      label: index % 2 === 0 ? "信任" : "试探",
-      strength: index % 2 === 0 ? 35 : 10,
-      summary:
-        input.settings.language === "zh"
-          ? "彼此有合作空间，但仍保留秘密。"
-          : "They can cooperate, but both still keep secrets."
-    }));
-
-    return {
-      id: id("save"),
-      name: input.name,
-      description: input.premise,
-      schemaVersion: "1",
-      turnNumber: 0,
-      saveSeed: id("seed"),
-      settings: input.settings,
-      worldMemory: {
-        timeline: [],
-        worldSummary: input.premise,
-        locationSummaries: {
-          [location.id]: location.description
-        }
-      },
-      characters,
-      locations: [location],
-      relationships,
-      turns: [],
-      createdAt,
-      updatedAt: createdAt
-    };
-  }
-
-  private renderTurnEvent(
-    save: Save,
-    characters: Character[],
-    location: Location | undefined,
-    instruction: string | undefined
-  ) {
-    const names = characters.map((character) => character.name).join("、");
-    const place = location?.name ?? save.name;
-
-    if (save.settings.language === "en") {
-      const base = `${names || "The active cast"} notices a shift around ${place}.`;
-      return instruction
-        ? `${base} The GM directive takes hold: ${instruction}.`
-        : `${base} Each character updates their next move.`;
-    }
-
-    const base = `${names || "活跃角色"}注意到${place}的局势发生了变化。`;
-    return instruction ? `${base} GM 指令生效：${instruction}。` : `${base} 他们各自调整了下一步行动。`;
-  }
 }
 
 export const prototypeStore = new PrototypeStore();
+
+export function buildSave(input: CreateSaveInput): Save {
+  const createdAt = now();
+  const location: Location = {
+    id: id("location"),
+    name: input.settings.language === "zh" ? "边境港口" : "Frontier Harbor",
+    description:
+      input.settings.language === "zh"
+        ? "一座夹在贸易、谣言和旧王国阴影之间的港口。"
+        : "A harbor caught between trade, rumor, and the shadow of an old kingdom.",
+    status: input.settings.language === "zh" ? "平静但暗流涌动" : "Calm with quiet pressure underneath"
+  };
+  const seeds = input.characterSeeds.length > 0 ? input.characterSeeds : ["守望者", "流亡继承人", "走私船长"];
+  const characters = seeds.slice(0, 8).map<Character>((seed, index) => ({
+    id: id("character"),
+    name: seed || `Character ${index + 1}`,
+    profile:
+      input.settings.language === "zh"
+        ? `${seed} 被卷入了 ${input.name} 的核心冲突。`
+        : `${seed} has been pulled into the central conflict of ${input.name}.`,
+    personality: input.settings.language === "zh" ? "谨慎、执着、会隐藏真实动机" : "Careful, driven, and private",
+    longTermGoal: input.settings.language === "zh" ? "保护自己珍视的东西" : "Protect what matters most",
+    shortTermGoal: input.settings.language === "zh" ? "弄清当前局势的真正威胁" : "Understand the immediate threat",
+    locationId: location.id,
+    status: input.settings.language === "zh" ? "可行动" : "Available",
+    secrets: [input.settings.language === "zh" ? "掌握一条尚未公开的线索" : "Knows one unrevealed lead"],
+    privateMemory: [input.settings.language === "zh" ? "记得世界刚刚开始运转" : "Remembers the world beginning to move"]
+  }));
+  const relationships = characters.slice(1).map<Relationship>((character, index) => ({
+    id: id("relationship"),
+    sourceCharacterId: characters[0]?.id ?? character.id,
+    targetCharacterId: character.id,
+    label: index % 2 === 0 ? "信任" : "试探",
+    strength: index % 2 === 0 ? 35 : 10,
+    summary:
+      input.settings.language === "zh"
+        ? "彼此有合作空间，但仍保留秘密。"
+        : "They can cooperate, but both still keep secrets."
+  }));
+
+  return {
+    id: id("save"),
+    name: input.name,
+    description: input.premise,
+    schemaVersion: "1",
+    turnNumber: 0,
+    saveSeed: id("seed"),
+    settings: input.settings,
+    worldMemory: {
+      timeline: [],
+      worldSummary: input.premise,
+      locationSummaries: {
+        [location.id]: location.description
+      }
+    },
+    characters,
+    locations: [location],
+    relationships,
+    turns: [],
+    createdAt,
+    updatedAt: createdAt
+  };
+}
+
+export function renderTurnEvent(
+  save: Save,
+  characters: Character[],
+  location: Location | undefined,
+  instruction: string | undefined
+) {
+  const names = characters.map((character) => character.name).join("、");
+  const place = location?.name ?? save.name;
+
+  if (save.settings.language === "en") {
+    const base = `${names || "The active cast"} notices a shift around ${place}.`;
+    return instruction
+      ? `${base} The GM directive takes hold: ${instruction}.`
+      : `${base} Each character updates their next move.`;
+  }
+
+  const base = `${names || "活跃角色"}注意到${place}的局势发生了变化。`;
+  return instruction ? `${base} GM 指令生效：${instruction}。` : `${base} 他们各自调整了下一步行动。`;
+}

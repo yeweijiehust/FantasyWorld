@@ -8,7 +8,8 @@ const EnvSchema = Type.Object({
   SESSION_SECRET: Type.Optional(Type.String()),
   ENCRYPTION_KEY: Type.Optional(Type.String()),
   ADMIN_PASSWORD_HASH: Type.Optional(Type.String()),
-  WEB_ORIGIN: Type.Optional(Type.String())
+  WEB_ORIGIN: Type.Optional(Type.String()),
+  DATA_STORE: Type.Optional(Type.Union([Type.Literal("postgres"), Type.Literal("memory")]))
 });
 
 type RawEnv = Static<typeof EnvSchema>;
@@ -23,6 +24,7 @@ export type AppEnv = {
   encryptionKey: string;
   adminPasswordHash: string | undefined;
   webOrigin: string;
+  dataStore: "postgres" | "memory";
 };
 
 export function loadEnv(raw: NodeJS.ProcessEnv = process.env): AppEnv {
@@ -40,6 +42,7 @@ export function loadEnv(raw: NodeJS.ProcessEnv = process.env): AppEnv {
     sessionSecret: value.SESSION_SECRET ?? "development-session-secret-development",
     encryptionKey: value.ENCRYPTION_KEY ?? "development-encryption-key",
     adminPasswordHash: value.ADMIN_PASSWORD_HASH,
-    webOrigin: value.WEB_ORIGIN ?? "http://localhost:5173"
+    webOrigin: value.WEB_ORIGIN ?? "http://localhost:5173",
+    dataStore: value.DATA_STORE ?? "postgres"
   };
 }

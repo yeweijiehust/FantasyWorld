@@ -27,6 +27,7 @@ jobs:
       ENCRYPTION_KEY: ci-encryption-key
       ADMIN_PASSWORD_HASH: ""
       NODE_ENV: test
+      RUN_DB_TESTS: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v6

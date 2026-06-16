@@ -9,10 +9,13 @@ import/export, model configuration, and a Fastify + React monorepo foundation.
 ```powershell
 corepack enable
 pnpm install
+docker compose up -d
+pnpm db:migrate
 pnpm dev
 ```
 
-The prototype login password is `fantasyworld` until `ADMIN_PASSWORD_HASH` is configured.
+The prototype login password is `fantasyworld` until `ADMIN_PASSWORD_HASH` is configured. Playwright uses a separate
+in-memory API process for E2E runs.
 
 ## Checks
 

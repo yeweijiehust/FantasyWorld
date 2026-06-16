@@ -4,18 +4,18 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:5174",
     trace: "retain-on-failure"
   },
   webServer: [
     {
-      command: "pnpm --filter @fantasy-world/api dev",
-      url: "http://127.0.0.1:4000/api/health",
+      command: "pnpm --filter @fantasy-world/api dev:e2e",
+      url: "http://127.0.0.1:4100/api/health",
       reuseExistingServer: !process.env.CI
     },
     {
-      command: "pnpm --filter @fantasy-world/web dev",
-      url: "http://127.0.0.1:5173",
+      command: "pnpm --filter @fantasy-world/web dev:e2e",
+      url: "http://127.0.0.1:5174",
       reuseExistingServer: !process.env.CI
     }
   ],
