@@ -27,12 +27,14 @@ FantasyWorld 第一版采用 TypeScript 全栈 monorepo。仓库使用 `pnpm wor
 - Testing：Vitest + Testing Library + Playwright。
 - Quality：ESLint + Prettier + TypeScript typecheck。
 - CI/CD：GitHub Actions 提供 PR 门禁、安全检查和手动 E2E workflow。
-- Deployment：GitHub 公开仓库作为 `origin`；Render 连接 GitHub，`main` 合并后自动部署；Render `render.yaml` 蓝图管理单 Web Service + Render Postgres。
+- Deployment：GitHub 公开仓库 `https://github.com/yeweijiehust/FantasyWorld.git` 已配置为 `origin`；Render 连接 GitHub，`main` 合并后自动部署；Render `render.yaml` 蓝图管理单 Web Service + Render Postgres。
 
 ## Monorepo Structure
 
 ```text
 FantasyWorld/
+  .gitattributes
+  .gitignore
   .github/
     workflows/
       ci.yml
@@ -67,6 +69,8 @@ FantasyWorld/
 - `apps/web`：React/Vite SPA、创建向导、存档列表、主工作台、设置页。
 - `packages/shared`：TypeBox schemas、API DTO、存档/回合/LLM 输出类型、常量。
 - `.github/workflows`：GitHub Actions 的 CI、安全检查和手动 E2E workflow。
+- `.gitignore`：忽略 Node 依赖、真实环境变量、构建产物、缓存、测试报告和本地 IDE/OS 文件。
+- `.gitattributes`：固定跨平台文本换行，避免 Windows 与 GitHub 协作时出现 LF/CRLF 漂移。
 
 ## Backend Architecture
 
@@ -185,10 +189,11 @@ FantasyWorld/
   - `NODE_ENV`
   - `PORT`
 - 后端启动时使用 TypeBox schema 校验 env，缺失或格式错误立即失败。
-- 本地提供 `.env.example` 和 Docker Compose Postgres。
+- 本地提供 `.env.example` 和 Docker Compose Postgres；真实 `.env`、`.env.*` 必须被 `.gitignore` 忽略，`.env.example` 必须保留可提交。
 - 本地提供 `pnpm auth:hash` 生成管理员密码 hash，并在 `.env.example` 说明用法。
 - GitHub remote：
-  - 后续创建 GitHub 公开仓库，并将本地 `origin` 指向该仓库。
+  - GitHub 公开仓库已创建：`https://github.com/yeweijiehust/FantasyWorld.git`。
+  - 本地 `origin` 已指向该仓库，当前 `main` 跟踪 `origin/main`。
   - `main` 分支启用保护规则，只允许通过 PR + required checks 合并。
   - 公开仓库中不得提交真实密钥、生产配置或真实用户存档。
 - Render 使用 `render.yaml` 声明 Web Service、build/start 命令、数据库和环境变量占位。

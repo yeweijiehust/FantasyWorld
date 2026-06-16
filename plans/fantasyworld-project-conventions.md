@@ -9,7 +9,8 @@
 ## Core Workflow
 
 - Git 工作流：
-  - 远程仓库使用 GitHub 公开仓库，本地 `origin` 指向该仓库。
+  - 远程仓库使用 GitHub 公开仓库：`https://github.com/yeweijiehust/FantasyWorld.git`。
+  - 本地 `origin` 指向该仓库，`main` 跟踪 `origin/main`。
   - 所有开发在分支上完成，AI/代理分支默认使用 `codex/<topic>`。
   - `main` 启用 GitHub branch protection，只接受通过 PR 的变更。
   - 禁止直接 push 到 `main`。
@@ -53,6 +54,12 @@
   - 导出存档默认不包含解密后的模型 API key。
   - 首版不支持 `ENCRYPTION_KEY` 自动轮换；启动或配置读取时必须检测解密失败并给出明确错误。
   - 部署文档必须强调备份 `ENCRYPTION_KEY`，否则已加密的 API key 可能无法恢复。
+- 仓库基础文件：
+  - 实现前必须先建立 `.gitignore` 和 `.gitattributes`。
+  - `.gitignore` 必须忽略 Node 依赖、真实环境变量、构建产物、缓存、测试报告、临时目录和本地 IDE/OS 文件。
+  - `.gitignore` 不得误忽略 `.env.example`、`pnpm-lock.yaml`、`.github/workflows/*.yml`、`render.yaml`、Docker Compose、Drizzle schema 或 migrations。
+  - `.gitattributes` 默认固定文本文件为 LF，Windows 脚本可显式使用 CRLF。
+  - 公开仓库暂不添加 LICENSE，默认保留权利；未来决定开源授权时再单独讨论。
 - 依赖：
   - 新依赖必须有明确用途，优先官方、活跃、维护良好的包。
   - 必须提交 lockfile。
