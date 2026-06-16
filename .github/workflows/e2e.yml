@@ -1,0 +1,25 @@
+name: e2e
+
+on:
+  workflow_dispatch:
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      SESSION_SECRET: e2e-session-secret-e2e-session-secret
+      ENCRYPTION_KEY: e2e-encryption-key
+      ADMIN_PASSWORD_HASH: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e

@@ -2,9 +2,11 @@
 
 ## Summary
 
-FantasyWorld 第一版采用 TypeScript 全栈 monorepo。仓库使用 `pnpm workspace` 管理 `apps/api`、`apps/web`、`packages/shared`，后端使用 Fastify，前端使用 React + Vite，数据库使用 Postgres + Drizzle。
+FantasyWorld 第一版采用 TypeScript 全栈 monorepo。仓库使用 `pnpm workspace` 管理
+`apps/api`、`apps/web`、`packages/shared`，后端使用 Fastify，前端使用 React + Vite，数据库使用 Postgres + Drizzle。
 
-部署目标是 Render 上的单个 Web Service，由 Fastify 同时提供 REST API、SSE 回合进度流和 React 构建后的静态文件。第一版优先做可玩闭环和可部署闭环，不引入多用户 SaaS、Redis 队列、复杂 agent 框架或前后端分离部署。
+部署目标是 Render 上的单个 Web Service，由 Fastify 同时提供 REST
+API、SSE 回合进度流和 React 构建后的静态文件。第一版优先做可玩闭环和可部署闭环，不引入多用户 SaaS、Redis 队列、复杂 agent 框架或前后端分离部署。
 
 ## Key Stack Decisions
 
@@ -27,7 +29,8 @@ FantasyWorld 第一版采用 TypeScript 全栈 monorepo。仓库使用 `pnpm wor
 - Testing：Vitest + Testing Library + Playwright。
 - Quality：ESLint + Prettier + TypeScript typecheck。
 - CI/CD：GitHub Actions 提供 PR 门禁、安全检查和手动 E2E workflow。
-- Deployment：GitHub 公开仓库 `https://github.com/yeweijiehust/FantasyWorld.git` 已配置为 `origin`；Render 连接 GitHub，`main` 合并后自动部署；Render `render.yaml` 蓝图管理单 Web Service + Render Postgres。
+- Deployment：GitHub 公开仓库 `https://github.com/yeweijiehust/FantasyWorld.git` 已配置为
+  `origin`；Render 连接 GitHub，`main` 合并后自动部署；Render `render.yaml` 蓝图管理单 Web Service + Render Postgres。
 
 ## Monorepo Structure
 
@@ -111,7 +114,7 @@ FantasyWorld/
 - `PATCH /api/saves/:id/relationships/:relationshipId`
 - `DELETE /api/saves/:id/relationships/:relationshipId`
 - `PATCH /api/saves/:id/world-memory`
-- `POST /api/saves/:id/import`
+- `POST /api/saves/import`
 - `GET /api/saves/:id/export`
 - `POST /api/save-generation-jobs`
 - `GET /api/save-generation-jobs/:id/events`
@@ -171,7 +174,8 @@ FantasyWorld/
 - LLM SDK 层保持薄封装，负责请求、结构化输出、重试、token/耗时统计和错误归一。
 - 保存模型配置时执行连接和能力探测，记录 JSON mode、usage、stream 支持情况。
 - 不支持 JSON mode 时使用纯文本 JSON 约束 + 本地 TypeBox 校验重试。
-- 全局模型配置提供默认 API key、base URL 和 model；存档级覆盖可修改 base URL、model、随机性和内容偏好，API key 默认继承全局配置。
+- 全局模型配置提供默认 API key、base URL 和 model；存档级覆盖可修改 base URL、model、随机性和内容偏好，API
+  key 默认继承全局配置。
 - 创建存档时后端写入 `save_generation_jobs`，前端通过 SSE 订阅生成进度；初始世界先进入草稿，用户确认后才创建正式存档。
 - 创建回合时后端写入 `turn_jobs`，前端通过 SSE 订阅任务状态。
 - 长任务请求使用 idempotency key 防止重复创建、重复扣费和重复写状态。
@@ -189,7 +193,8 @@ FantasyWorld/
   - `NODE_ENV`
   - `PORT`
 - 后端启动时使用 TypeBox schema 校验 env，缺失或格式错误立即失败。
-- 本地提供 `.env.example` 和 Docker Compose Postgres；真实 `.env`、`.env.*` 必须被 `.gitignore` 忽略，`.env.example` 必须保留可提交。
+- 本地提供 `.env.example` 和 Docker Compose Postgres；真实 `.env`、`.env.*` 必须被 `.gitignore` 忽略，`.env.example`
+  必须保留可提交。
 - 本地提供 `pnpm auth:hash` 生成管理员密码 hash，并在 `.env.example` 说明用法。
 - GitHub remote：
   - GitHub 公开仓库已创建：`https://github.com/yeweijiehust/FantasyWorld.git`。
@@ -225,11 +230,14 @@ FantasyWorld/
 
 - Type tests：确认 shared TypeBox schemas 能正确推导 API DTO、存档状态和 LLM 输出类型。
 - Unit tests：Vitest 覆盖 shared schemas、LLM 输出校验、加密/解密、回合状态 reducer、Drizzle repository 逻辑。
-- API tests：Fastify `inject` 测试 auth、model config、存档 CRUD、世界对象编辑、创建存档任务、回合任务创建、取消、重试、失败处理、回滚。
+- API tests：Fastify `inject` 测试 auth、model
+  config、存档 CRUD、世界对象编辑、创建存档任务、回合任务创建、取消、重试、失败处理、回滚。
 - Frontend tests：Vitest + Testing Library 覆盖创建向导、配置页、三栏工作台基础交互。
-- E2E tests：Playwright 覆盖登录、配置模型、创建存档、推进回合、编辑草稿、接受回合、回滚、导入导出，并在桌面/移动视口做关键页面截图或布局检查。
+- E2E
+  tests：Playwright 覆盖登录、配置模型、创建存档、推进回合、编辑草稿、接受回合、回滚、导入导出，并在桌面/移动视口做关键页面截图或布局检查。
 - Compatibility tests：覆盖当前版本导入、旧版本迁移、未知版本拒绝、模型能力探测降级和随机 seed 复现。
-- GitHub Actions checks：PR 自动运行 `ci.yml` 并阻塞不合格 merge；`security.yml` 检查依赖和泄密风险；`e2e.yml` 可手动触发。
+- GitHub Actions checks：PR 自动运行 `ci.yml` 并阻塞不合格 merge；`security.yml` 检查依赖和泄密风险；`e2e.yml`
+  可手动触发。
 - Deployment checks：Render 在 `main` 合并后自动部署；部署完成后检查 `/api/health`。
 
 ## Assumptions And Defaults
