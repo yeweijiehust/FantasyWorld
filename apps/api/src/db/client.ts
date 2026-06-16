@@ -5,12 +5,12 @@ import { DatabaseStore } from "../store/database-store.js";
 
 const { Pool } = pg;
 
-export function createDatabaseStore(databaseUrl: string) {
+export function createDatabaseStore(databaseUrl: string, encryptionKey: string) {
   const pool = new Pool({ connectionString: databaseUrl });
   const db = drizzle(pool, { schema });
 
   return {
-    store: new DatabaseStore(db),
+    store: new DatabaseStore(db, encryptionKey),
     close: () => pool.end()
   };
 }

@@ -7,7 +7,7 @@ const env = loadEnv();
 const runtime =
   env.dataStore === "memory"
     ? { store: prototypeStore, close: () => Promise.resolve() }
-    : createDatabaseStore(env.databaseUrl);
+    : createDatabaseStore(env.databaseUrl, env.encryptionKey);
 const app = buildApp({ env, store: runtime.store });
 
 app.addHook("onClose", async () => {

@@ -1,9 +1,12 @@
+import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { createDatabaseStore } from "./db/client.js";
 import { PrototypeStore } from "./store/prototype-store.js";
-import type { Save } from "@fantasy-world/shared";
+import type { ModelConfig, Save } from "@fantasy-world/shared";
+
+const { Pool } = pg;
 
 const env = loadEnv({
   NODE_ENV: "test",
@@ -18,6 +21,14 @@ const databaseEnv = loadEnv({
   ENCRYPTION_KEY: "test-encryption-key",
   DATA_STORE: "postgres"
 });
+const productionEnv = {
+  NODE_ENV: "production",
+  DATABASE_URL: "postgres://fantasyworld:fantasyworld@localhost:5432/fantasyworld",
+  SESSION_SECRET: "production-session-secret-32-chars",
+  ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+  ADMIN_PASSWORD_HASH: "scrypt$salt$hash",
+  DATA_STORE: "postgres"
+};
 
 async function login(app: ReturnType<typeof buildApp>) {
   const response = await app.inject({
@@ -71,6 +82,104 @@ async function createAcceptedSave(app: ReturnType<typeof buildApp>, cookie: stri
 
   return accepted.json<{ id: string; characters: unknown[] }>();
 }
+
+describe("environment validation", () => {
+  it("requires production secrets and persistent storage", () => {
+    expect(() => loadEnv({ NODE_ENV: "production" })).toThrow("DATABASE_URL");
+    expect(() => loadEnv({ ...productionEnv, DATA_STORE: "memory" })).toThrow("DATA_STORE");
+    expect(() => loadEnv({ ...productionEnv, ENCRYPTION_KEY: "not-base64" })).toThrow("ENCRYPTION_KEY");
+    expect(() => loadEnv({ ...productionEnv, ADMIN_PASSWORD_HASH: undefined })).toThrow("ADMIN_PASSWORD_HASH");
+    expect(loadEnv(productionEnv).dataStore).toBe("postgres");
+  });
+});
+
+describe("FantasyWorld API auth and model config safety", () => {
+  it("rejects unauthorized requests, bad passwords, and logged-out sessions", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+
+    const unauthorized = await app.inject({
+      method: "GET",
+      url: "/api/saves"
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const badLogin = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: {
+        password: "wrong-password"
+      }
+    });
+    expect(badLogin.statusCode).toBe(401);
+
+    const cookie = await login(app);
+    const authorized = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+    expect(authorized.statusCode).toBe(200);
+
+    const logout = await app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: {
+        cookie
+      }
+    });
+    expect(logout.statusCode).toBe(200);
+
+    const afterLogout = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+    expect(afterLogout.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("never returns the submitted model API key", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+    const apiKey = "test-secret-api-key-value";
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: "/api/model-config",
+      headers: {
+        cookie
+      },
+      payload: {
+        baseUrl: "https://models.example.test/v1",
+        model: "fantasy-test-model",
+        apiKey
+      }
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json<ModelConfig>().hasApiKey).toBe(true);
+    expect(updated.json<ModelConfig>().apiKeyTail).toBe("alue");
+    expect(JSON.stringify(updated.json())).not.toContain(apiKey);
+
+    const fetched = await app.inject({
+      method: "GET",
+      url: "/api/model-config",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(fetched.statusCode).toBe(200);
+    expect(JSON.stringify(fetched.json())).not.toContain(apiKey);
+
+    await app.close();
+  });
+});
 
 describe("FantasyWorld API prototype", () => {
   it("creates a save draft, accepts it, and advances one turn", async () => {
@@ -149,10 +258,44 @@ const describeDb = process.env.RUN_DB_TESTS === "1" ? describe : describe.skip;
 
 describeDb("FantasyWorld API database persistence", () => {
   it("persists saves, edits, turns, rollback snapshots, and imports", async () => {
-    const firstRuntime = createDatabaseStore(databaseEnv.databaseUrl);
+    const firstRuntime = createDatabaseStore(databaseEnv.databaseUrl, databaseEnv.encryptionKey);
     const firstApp = buildApp({ env: databaseEnv, store: firstRuntime.store });
     const cookie = await login(firstApp);
     const save = await createAcceptedSave(firstApp, cookie, `持久化测试 ${crypto.randomUUID()}`);
+    const apiKey = "test-secret-api-key-value";
+
+    const modelConfig = await firstApp.inject({
+      method: "PUT",
+      url: "/api/model-config",
+      headers: {
+        cookie
+      },
+      payload: {
+        model: "db-model",
+        apiKey
+      }
+    });
+
+    expect(modelConfig.statusCode).toBe(200);
+    expect(modelConfig.json<ModelConfig>().hasApiKey).toBe(true);
+    expect(modelConfig.json<ModelConfig>().apiKeyTail).toBe("alue");
+    expect(JSON.stringify(modelConfig.json())).not.toContain(apiKey);
+
+    const pool = new Pool({ connectionString: databaseEnv.databaseUrl });
+
+    try {
+      const storedConfig = await pool.query<{
+        data: ModelConfig;
+        api_key_ciphertext: string | null;
+      }>("select data, api_key_ciphertext from model_configs where id = $1", ["global"]);
+      const row = storedConfig.rows[0];
+
+      expect(row?.api_key_ciphertext).toBeTypeOf("string");
+      expect(row?.data.apiKeyTail).toBe("alue");
+      expect(JSON.stringify(row)).not.toContain(apiKey);
+    } finally {
+      await pool.end();
+    }
 
     const patched = await firstApp.inject({
       method: "PATCH",
@@ -233,6 +376,7 @@ describeDb("FantasyWorld API database persistence", () => {
     const exportedSave = exported.json<Save>();
     expect(exportedSave.turnNumber).toBe(1);
     expect(exportedSave.turns[0]?.status).toBe("accepted");
+    expect(JSON.stringify(exportedSave)).not.toContain(apiKey);
 
     const rollback = await firstApp.inject({
       method: "POST",
@@ -262,7 +406,7 @@ describeDb("FantasyWorld API database persistence", () => {
     await firstApp.close();
     await firstRuntime.close();
 
-    const secondRuntime = createDatabaseStore(databaseEnv.databaseUrl);
+    const secondRuntime = createDatabaseStore(databaseEnv.databaseUrl, databaseEnv.encryptionKey);
     const secondApp = buildApp({ env: databaseEnv, store: secondRuntime.store });
     const secondCookie = await login(secondApp);
     const importedId = imported.json<Save>().id;

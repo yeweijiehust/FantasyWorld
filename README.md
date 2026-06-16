@@ -17,6 +17,18 @@ pnpm dev
 The prototype login password is `fantasyworld` until `ADMIN_PASSWORD_HASH` is configured. Playwright uses a separate
 in-memory API process for E2E runs.
 
+## Production Environment
+
+Production requires persistent Postgres storage and explicit secrets:
+
+```powershell
+pnpm auth:hash "replace-with-admin-password"
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+Set `DATA_STORE=postgres`, `DATABASE_URL`, `SESSION_SECRET`, `ENCRYPTION_KEY`, and `ADMIN_PASSWORD_HASH` in Render. Back
+up `ENCRYPTION_KEY`; stored model API keys cannot be recovered if it is lost.
+
 ## Checks
 
 ```powershell
