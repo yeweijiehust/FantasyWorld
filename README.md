@@ -29,3 +29,4 @@ pnpm test:e2e
 - [Product plan](plans/fantasyworld-part1-product-plan.md)
 - [Tech stack plan](plans/fantasyworld-tech-stack-plan.md)
 - [Project conventions](plans/fantasyworld-project-conventions.md)
+- [Implementation roadmap](plans/fantasyworld-implementation-roadmap.md)
