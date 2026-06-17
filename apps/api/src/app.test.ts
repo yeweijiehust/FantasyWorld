@@ -274,6 +274,55 @@ describe("FantasyWorld API auth and model config safety", () => {
 });
 
 describe("FantasyWorld API prototype", () => {
+  it("returns stable boundary errors for missing resources and invalid bodies", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+
+    const missingSave = await app.inject({
+      method: "GET",
+      url: "/api/saves/missing-save",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(missingSave.statusCode).toBe(404);
+    expect(missingSave.json<{ error: { code: string } }>().error.code).toBe("not_found");
+
+    const invalidBody = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload: {
+        templateId: "fantasy-frontier",
+        name: "",
+        premise: "",
+        characterSeeds: ["Only one"],
+        settings: {
+          language: "zh",
+          turnTimeScale: "一幕",
+          randomness: 25,
+          contentBoundary: "PG-13",
+          styleGuide: "一致性优先"
+        }
+      }
+    });
+
+    expect(invalidBody.statusCode).toBe(400);
+    expect(invalidBody.json<{ error: { code: string } }>().error.code).toBe("validation_error");
+
+    const unauthorizedModelConfig = await app.inject({
+      method: "GET",
+      url: "/api/model-config"
+    });
+
+    expect(unauthorizedModelConfig.statusCode).toBe(401);
+
+    await app.close();
+  });
+
   it("generates localized template drafts without listing them before acceptance", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
     const cookie = await login(app);
