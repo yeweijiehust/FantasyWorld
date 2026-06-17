@@ -6,7 +6,14 @@ import { createDatabaseStore } from "./db/client.js";
 import { LlmService } from "./llm/service.js";
 import type { LlmProvider } from "./llm/types.js";
 import { PrototypeStore } from "./store/prototype-store.js";
-import type { ModelConfig, ModelProbeResult, Save, SaveGenerationJob, SaveListItem } from "@fantasy-world/shared";
+import type {
+  ModelConfig,
+  ModelProbeResult,
+  Save,
+  SaveGenerationJob,
+  SaveListItem,
+  TurnJob
+} from "@fantasy-world/shared";
 
 const { Pool } = pg;
 
@@ -376,6 +383,206 @@ describe("FantasyWorld API prototype", () => {
     await app.close();
   });
 
+  it("recovers, streams, cancels, and retries generation jobs", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+    const payload = {
+      templateId: "fantasy-frontier",
+      name: "Recoverable draft",
+      premise: "A draft should survive refresh before acceptance.",
+      characterSeeds: ["A", "B", "C"],
+      idempotencyKey: "generation-recovery",
+      settings: {
+        language: "en" as const,
+        turnTimeScale: "One scene",
+        randomness: 25,
+        contentBoundary: "PG-13",
+        styleGuide: "Test"
+      }
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(duplicate.statusCode).toBe(201);
+    expect(duplicate.json<SaveGenerationJob>().id).toBe(first.json<SaveGenerationJob>().id);
+
+    const jobId = first.json<SaveGenerationJob>().id;
+    const restored = await app.inject({
+      method: "GET",
+      url: `/api/save-generation-jobs/${jobId}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json<SaveGenerationJob>().phase).toBe("ready_for_review");
+
+    const events = await app.inject({
+      method: "GET",
+      url: `/api/save-generation-jobs/${jobId}/events`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(events.statusCode).toBe(200);
+    expect(events.payload).toContain("event: snapshot");
+    expect(events.payload).toContain("event: final");
+    expect(events.payload).toContain(jobId);
+
+    const listBeforeAccept = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(listBeforeAccept.json<SaveListItem[]>()).toEqual([]);
+
+    const cancelled = await app.inject({
+      method: "POST",
+      url: `/api/save-generation-jobs/${jobId}/cancel`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json<SaveGenerationJob>().status).toBe("cancelled");
+
+    const retried = await app.inject({
+      method: "POST",
+      url: `/api/save-generation-jobs/${jobId}/retry`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json<SaveGenerationJob>().status).toBe("needs_review");
+    expect(retried.json<SaveGenerationJob>().id).toBe(jobId);
+
+    await app.close();
+  });
+
+  it("deduplicates active turn jobs and can cancel then retry them", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+    const save = await createAcceptedSave(app, cookie, "任务系统测试");
+    const payload = {
+      gmInstruction: "让钟楼突然停摆",
+      idempotencyKey: "turn-recovery"
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload
+    });
+    const competing = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "尝试并发推进",
+        idempotencyKey: "turn-competing"
+      }
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(duplicate.json<TurnJob>().id).toBe(first.json<TurnJob>().id);
+    expect(competing.json<TurnJob>().id).toBe(first.json<TurnJob>().id);
+
+    const jobId = first.json<TurnJob>().id;
+    const restored = await app.inject({
+      method: "GET",
+      url: `/api/turn-jobs/${jobId}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json<TurnJob>().phase).toBe("ready_for_review");
+
+    const saveWithDraft = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(saveWithDraft.json<Save>().turns).toHaveLength(1);
+
+    const cancelled = await app.inject({
+      method: "POST",
+      url: `/api/turn-jobs/${jobId}/cancel`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json<TurnJob>().status).toBe("cancelled");
+
+    const saveAfterCancel = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(saveAfterCancel.json<Save>().turns).toHaveLength(0);
+    expect(saveAfterCancel.json<Save>().turnNumber).toBe(0);
+
+    const retried = await app.inject({
+      method: "POST",
+      url: `/api/turn-jobs/${jobId}/retry`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json<TurnJob>().id).toBe(jobId);
+    expect(retried.json<TurnJob>().turn?.turnNumber).toBe(1);
+
+    await app.close();
+  });
+
   it("creates a save draft, accepts it, and advances one turn", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
     const cookie = await login(app);
@@ -545,7 +752,38 @@ describeDb("FantasyWorld API database persistence", () => {
     });
 
     expect(turn.statusCode).toBe(201);
-    const turnId = turn.json<{ turn: { id: string } }>().turn.id;
+    const turnJob = turn.json<TurnJob>();
+    const turnId = turnJob.turn?.id;
+
+    if (!turnId) {
+      throw new Error("Missing turn id");
+    }
+
+    const duplicateTurn = await firstApp.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "让港口议会公开争执",
+        idempotencyKey: "db-turn"
+      }
+    });
+    const competingTurn = await firstApp.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "尝试并发推进",
+        idempotencyKey: "db-turn-competing"
+      }
+    });
+
+    expect(duplicateTurn.json<TurnJob>().id).toBe(turnJob.id);
+    expect(competingTurn.json<TurnJob>().id).toBe(turnJob.id);
 
     const acceptedTurn = await firstApp.inject({
       method: "POST",

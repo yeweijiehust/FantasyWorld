@@ -2,6 +2,7 @@ import type {
   Character,
   CreateSaveInput,
   CreateTurnInput,
+  JobStatus,
   Location,
   ModelConfig,
   CharacterPatch,
@@ -125,10 +126,20 @@ export class PrototypeStore implements FantasyWorldStore {
   }
 
   createGenerationJob(input: CreateSaveInput): SaveGenerationJob {
+    if (input.idempotencyKey) {
+      const existing = [...this.generationJobs.values()].find((job) => job.idempotencyKey === input.idempotencyKey);
+
+      if (existing) {
+        return structuredClone(existing);
+      }
+    }
+
     const save = buildSave(input);
     const job: SaveGenerationJob = {
       id: id("generation_job"),
       status: "needs_review",
+      phase: "ready_for_review",
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       draft: {
         id: id("draft"),
         input,
@@ -146,10 +157,60 @@ export class PrototypeStore implements FantasyWorldStore {
     return job ? structuredClone(job) : undefined;
   }
 
-  acceptGenerationJob(jobId: string): Save | undefined {
+  cancelGenerationJob(jobId: string): SaveGenerationJob | undefined {
+    const job = this.generationJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    if (!isActiveJobStatus(job.status)) {
+      return structuredClone(job);
+    }
+
+    const cancelled: SaveGenerationJob = {
+      ...job,
+      status: "cancelled",
+      phase: "cancelled"
+    };
+
+    this.generationJobs.set(jobId, cancelled);
+    return structuredClone(cancelled);
+  }
+
+  retryGenerationJob(jobId: string): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
 
     if (!job?.draft) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return structuredClone(job);
+    }
+
+    const save = buildSave(job.draft.input);
+    const retried: SaveGenerationJob = {
+      id: job.id,
+      status: "needs_review",
+      phase: "ready_for_review",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      draft: {
+        ...job.draft,
+        id: id("draft"),
+        save,
+        createdAt: now()
+      }
+    };
+
+    this.generationJobs.set(jobId, retried);
+    return structuredClone(retried);
+  }
+
+  acceptGenerationJob(jobId: string): Save | undefined {
+    const job = this.generationJobs.get(jobId);
+
+    if (!job?.draft || job.status === "cancelled" || job.status === "failed") {
       return undefined;
     }
 
@@ -160,7 +221,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
     this.saves.set(accepted.id, structuredClone(accepted));
     this.rollbackSnapshots.set(accepted.id, []);
-    this.generationJobs.set(jobId, { ...job, status: "accepted" });
+    this.generationJobs.set(jobId, { ...job, status: "accepted", phase: "accepted" });
 
     return structuredClone(accepted);
   }
@@ -233,69 +294,23 @@ export class PrototypeStore implements FantasyWorldStore {
       return undefined;
     }
 
-    const turnNumber = save.turnNumber + 1;
-    const location = save.locations[0];
-    const involved = save.characters.slice(0, Math.min(2, save.characters.length));
-    const instruction = input.gmInstruction?.trim();
-    const eventTitle = instruction ? "GM 指令改变了局势" : "世界自行推进";
-    const eventBody = renderTurnEvent(save, involved, location, instruction);
-    const event =
-      location?.id !== undefined
-        ? {
-            id: id("event"),
-            title: eventTitle,
-            body: eventBody,
-            involvedCharacterIds: involved.map((character) => character.id),
-            locationId: location.id
-          }
-        : {
-            id: id("event"),
-            title: eventTitle,
-            body: eventBody,
-            involvedCharacterIds: involved.map((character) => character.id)
-          };
-    const turn: Turn = {
-      id: id("turn"),
-      saveId,
-      turnNumber,
-      status: "needs_review",
-      events: [event],
-      stateChanges: [
-        {
-          id: id("change"),
-          targetType: "worldMemory",
-          field: "timeline",
-          before: `${save.worldMemory.timeline.length} entries`,
-          after: `${save.worldMemory.timeline.length + 1} entries`
-        }
-      ],
-      callSummary: {
-        model: this.modelConfig.model,
-        calls: 1,
-        durationMs: 320,
-        estimatedTokens: 900
-      },
-      createdAt: now()
-    };
+    if (input.idempotencyKey) {
+      const existing = [...this.turnJobs.values()].find(
+        (job) => job.saveId === saveId && job.idempotencyKey === input.idempotencyKey
+      );
 
-    const updatedSave: Save = {
-      ...save,
-      turnNumber,
-      turns: [...save.turns, turn],
-      worldMemory: {
-        ...save.worldMemory,
-        timeline: [...save.worldMemory.timeline, `${turnNumber}. ${eventTitle}: ${eventBody}`],
-        worldSummary: `${save.worldMemory.worldSummary}\n第 ${turnNumber} 回合：${eventBody}`
-      },
-      updatedAt: now()
-    };
+      if (existing) {
+        return structuredClone(existing);
+      }
+    }
 
-    const job: TurnJob = {
-      id: id("turn_job"),
-      saveId,
-      status: "needs_review",
-      turn
-    };
+    const active = [...this.turnJobs.values()].find((job) => job.saveId === saveId && isActiveJobStatus(job.status));
+
+    if (active) {
+      return structuredClone(active);
+    }
+
+    const { job, updatedSave } = buildTurnDraft(save, input, this.modelConfig.model);
 
     const snapshots = this.rollbackSnapshots.get(saveId) ?? [];
     this.rollbackSnapshots.set(saveId, [...snapshots, structuredClone(save)]);
@@ -303,6 +318,75 @@ export class PrototypeStore implements FantasyWorldStore {
     this.turnJobs.set(job.id, job);
 
     return structuredClone(job);
+  }
+
+  cancelTurnJob(jobId: string): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    if (!isActiveJobStatus(job.status)) {
+      return structuredClone(job);
+    }
+
+    if (job.turn) {
+      const save = this.saves.get(job.saveId);
+      const snapshots = this.rollbackSnapshots.get(job.saveId) ?? [];
+      const previous = snapshots.at(-1);
+
+      if (save?.turns.some((turn) => turn.id === job.turn?.id) && previous) {
+        this.rollbackSnapshots.set(job.saveId, snapshots.slice(0, -1));
+        this.saves.set(job.saveId, structuredClone({ ...previous, updatedAt: now() }));
+      }
+    }
+
+    const cancelled: TurnJob = {
+      ...job,
+      status: "cancelled",
+      phase: "cancelled"
+    };
+
+    if (job.turn) {
+      cancelled.turn = { ...job.turn, status: "cancelled" };
+    }
+
+    this.turnJobs.set(jobId, cancelled);
+    return structuredClone(cancelled);
+  }
+
+  retryTurnJob(jobId: string): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return structuredClone(job);
+    }
+
+    const save = this.saves.get(job.saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const { job: retried, updatedSave } = buildTurnDraft(
+      save,
+      job.input ?? {},
+      this.modelConfig.model,
+      job.id,
+      job.idempotencyKey
+    );
+    const snapshots = this.rollbackSnapshots.get(job.saveId) ?? [];
+
+    this.rollbackSnapshots.set(job.saveId, [...snapshots, structuredClone(save)]);
+    this.saves.set(job.saveId, updatedSave);
+    this.turnJobs.set(jobId, retried);
+
+    return structuredClone(retried);
   }
 
   acceptTurn(turnId: string): Save | undefined {
@@ -419,6 +503,85 @@ export function buildSave(input: CreateSaveInput): Save {
     createdAt,
     updatedAt: createdAt
   };
+}
+
+export function isActiveJobStatus(status: JobStatus) {
+  return status === "queued" || status === "running" || status === "needs_review";
+}
+
+export function buildTurnDraft(
+  save: Save,
+  input: CreateTurnInput,
+  model: string,
+  jobId = id("turn_job"),
+  idempotencyKey = input.idempotencyKey
+) {
+  const turnNumber = save.turnNumber + 1;
+  const location = save.locations[0];
+  const involved = save.characters.slice(0, Math.min(2, save.characters.length));
+  const instruction = input.gmInstruction?.trim();
+  const eventTitle = instruction ? "GM 指令改变了局势" : "世界自行推进";
+  const eventBody = renderTurnEvent(save, involved, location, instruction);
+  const event =
+    location?.id !== undefined
+      ? {
+          id: id("event"),
+          title: eventTitle,
+          body: eventBody,
+          involvedCharacterIds: involved.map((character) => character.id),
+          locationId: location.id
+        }
+      : {
+          id: id("event"),
+          title: eventTitle,
+          body: eventBody,
+          involvedCharacterIds: involved.map((character) => character.id)
+        };
+  const turn: Turn = {
+    id: id("turn"),
+    saveId: save.id,
+    turnNumber,
+    status: "needs_review",
+    events: [event],
+    stateChanges: [
+      {
+        id: id("change"),
+        targetType: "worldMemory",
+        field: "timeline",
+        before: `${save.worldMemory.timeline.length} entries`,
+        after: `${save.worldMemory.timeline.length + 1} entries`
+      }
+    ],
+    callSummary: {
+      model,
+      calls: 1,
+      durationMs: 320,
+      estimatedTokens: 900
+    },
+    createdAt: now()
+  };
+  const updatedSave: Save = {
+    ...save,
+    turnNumber,
+    turns: [...save.turns, turn],
+    worldMemory: {
+      ...save.worldMemory,
+      timeline: [...save.worldMemory.timeline, `${turnNumber}. ${eventTitle}: ${eventBody}`],
+      worldSummary: `${save.worldMemory.worldSummary}\n第 ${turnNumber} 回合：${eventBody}`
+    },
+    updatedAt: now()
+  };
+  const job: TurnJob = {
+    id: jobId,
+    saveId: save.id,
+    status: "needs_review",
+    phase: "ready_for_review",
+    input,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    turn
+  };
+
+  return { job, updatedSave };
 }
 
 export function renderTurnEvent(

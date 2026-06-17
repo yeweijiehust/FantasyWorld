@@ -59,8 +59,16 @@ export const api = {
     request<Save>(`/api/saves/${saveId}/characters/${characterId}`, { method: "PATCH", body }),
   createGenerationJob: (body: CreateSaveInput) =>
     request<SaveGenerationJob>("/api/save-generation-jobs", { method: "POST", body }),
+  generationJob: (id: string) => request<SaveGenerationJob>(`/api/save-generation-jobs/${id}`),
+  cancelGenerationJob: (id: string) =>
+    request<SaveGenerationJob>(`/api/save-generation-jobs/${id}/cancel`, { method: "POST" }),
+  retryGenerationJob: (id: string) =>
+    request<SaveGenerationJob>(`/api/save-generation-jobs/${id}/retry`, { method: "POST" }),
   acceptGenerationJob: (id: string) => request<Save>(`/api/save-generation-jobs/${id}/accept`, { method: "POST" }),
   createTurn: (saveId: string, body: CreateTurnInput) =>
     request<TurnJob>(`/api/saves/${saveId}/turns`, { method: "POST", body }),
+  turnJob: (id: string) => request<TurnJob>(`/api/turn-jobs/${id}`),
+  cancelTurnJob: (id: string) => request<TurnJob>(`/api/turn-jobs/${id}/cancel`, { method: "POST" }),
+  retryTurnJob: (id: string) => request<TurnJob>(`/api/turn-jobs/${id}/retry`, { method: "POST" }),
   acceptTurn: (id: string) => request<Save>(`/api/turns/${id}/accept`, { method: "POST" })
 };

@@ -411,6 +411,23 @@ export function buildApp(options: BuildAppOptions) {
   );
 
   app.get(
+    "/api/save-generation-jobs/:id",
+    {
+      schema: {
+        params: GenerationParamsSchema,
+        response: {
+          200: SaveGenerationJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.getGenerationJob(request.params.id);
+      return job ?? sendError(reply, 404, "not_found", "Generation job not found");
+    }
+  );
+
+  app.get(
     "/api/save-generation-jobs/:id/events",
     {
       schema: {
@@ -418,8 +435,43 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = await store.getGenerationJob(request.params.id);
-      return sendSse(reply, job ?? { error: { code: "not_found", message: "Generation job not found" } });
+      return sendJobSse(reply, async () => store.getGenerationJob(request.params.id), {
+        error: { code: "not_found", message: "Generation job not found" }
+      });
+    }
+  );
+
+  app.post(
+    "/api/save-generation-jobs/:id/cancel",
+    {
+      schema: {
+        params: GenerationParamsSchema,
+        response: {
+          200: SaveGenerationJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.cancelGenerationJob(request.params.id);
+      return job ?? sendError(reply, 404, "not_found", "Generation job not found");
+    }
+  );
+
+  app.post(
+    "/api/save-generation-jobs/:id/retry",
+    {
+      schema: {
+        params: GenerationParamsSchema,
+        response: {
+          200: SaveGenerationJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.retryGenerationJob(request.params.id);
+      return job ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
   );
 
@@ -465,6 +517,23 @@ export function buildApp(options: BuildAppOptions) {
   );
 
   app.get(
+    "/api/turn-jobs/:id",
+    {
+      schema: {
+        params: TurnJobParamsSchema,
+        response: {
+          200: TurnJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.getTurnJob(request.params.id);
+      return job ?? sendError(reply, 404, "not_found", "Turn job not found");
+    }
+  );
+
+  app.get(
     "/api/turn-jobs/:id/events",
     {
       schema: {
@@ -472,8 +541,43 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = await store.getTurnJob(request.params.id);
-      return sendSse(reply, job ?? { error: { code: "not_found", message: "Turn job not found" } });
+      return sendJobSse(reply, async () => store.getTurnJob(request.params.id), {
+        error: { code: "not_found", message: "Turn job not found" }
+      });
+    }
+  );
+
+  app.post(
+    "/api/turn-jobs/:id/cancel",
+    {
+      schema: {
+        params: TurnJobParamsSchema,
+        response: {
+          200: TurnJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.cancelTurnJob(request.params.id);
+      return job ?? sendError(reply, 404, "not_found", "Turn job not found");
+    }
+  );
+
+  app.post(
+    "/api/turn-jobs/:id/retry",
+    {
+      schema: {
+        params: TurnJobParamsSchema,
+        response: {
+          200: TurnJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.retryTurnJob(request.params.id);
+      return job ?? sendError(reply, 404, "not_found", "Turn job not found");
     }
   );
 
@@ -526,6 +630,7 @@ type SseReply = {
     writeHead: (statusCode: number, headers: Record<string, string>) => void;
     write: (chunk: string) => void;
     end: () => void;
+    on?: (event: "close", listener: () => void) => void;
   };
 };
 
@@ -544,13 +649,46 @@ function sendError<TStatusCode extends number>(
   };
 }
 
-function sendSse(reply: SseReply, payload: unknown) {
+async function sendJobSse(reply: SseReply, getSnapshot: () => Promise<unknown>, missingPayload: unknown) {
   reply.raw.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive"
   });
-  reply.raw.write(`event: snapshot\n`);
-  reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+
+  let closed = false;
+  let lastPayload = "";
+  reply.raw.on?.("close", () => {
+    closed = true;
+  });
+
+  for (let attempt = 0; attempt < 40 && !closed; attempt += 1) {
+    const payload = (await getSnapshot()) ?? missingPayload;
+    const serialized = JSON.stringify(payload);
+
+    if (serialized !== lastPayload) {
+      writeSseEvent(reply, "snapshot", payload);
+      lastPayload = serialized;
+    }
+
+    if (isSseFinalPayload(payload)) {
+      writeSseEvent(reply, "final", payload);
+      break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
   reply.raw.end();
+}
+
+function writeSseEvent(reply: SseReply, event: string, payload: unknown) {
+  reply.raw.write(`event: ${event}\n`);
+  reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function isSseFinalPayload(payload: unknown) {
+  const status = (payload as { status?: string }).status;
+
+  return status === "needs_review" || status === "failed" || status === "cancelled" || status === "accepted";
 }
