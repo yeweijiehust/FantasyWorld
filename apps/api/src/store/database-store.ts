@@ -3,12 +3,17 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type {
   Character,
   CharacterPatch,
+  CreateCharacterInput,
+  CreateLocationInput,
+  CreateRelationshipInput,
   CreateSaveInput,
   CreateTurnInput,
   Location,
+  LocationPatch,
   ModelConfig,
   PatchTurnDraftInput,
   Relationship,
+  RelationshipPatch,
   Save,
   SaveGenerationJob,
   SaveImport,
@@ -354,6 +359,11 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const changes = { ...patch };
     delete changes.id;
+
+    if (changes.locationId && !save.locations.some((location) => location.id === changes.locationId)) {
+      return undefined;
+    }
+
     const updated: Character = {
       ...character,
       ...changes,
@@ -362,6 +372,190 @@ export class DatabaseStore implements FantasyWorldStore {
 
     await this.db.update(dbSchema.characters).set({ data: updated }).where(eq(dbSchema.characters.id, characterId));
 
+    return this.readSave(saveId);
+  }
+
+  async createCharacter(saveId: string, input: CreateCharacterInput): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || !save.locations.some((location) => location.id === input.locationId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      characters: [...save.characters, { ...input, id: id("character") }],
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async deleteCharacter(saveId: string, characterId: string): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || !save.characters.some((character) => character.id === characterId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      characters: save.characters.filter((character) => character.id !== characterId),
+      relationships: save.relationships.filter(
+        (relationship) =>
+          relationship.sourceCharacterId !== characterId && relationship.targetCharacterId !== characterId
+      ),
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async createLocation(saveId: string, input: CreateLocationInput): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const location: Location = { ...input, id: id("location") };
+    const updated: Save = {
+      ...save,
+      locations: [...save.locations, location],
+      worldMemory: {
+        ...save.worldMemory,
+        locationSummaries: {
+          ...save.worldMemory.locationSummaries,
+          [location.id]: location.description
+        }
+      },
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async patchLocation(saveId: string, locationId: string, patch: LocationPatch): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || !save.locations.some((location) => location.id === locationId)) {
+      return undefined;
+    }
+
+    const changes = { ...patch };
+    delete changes.id;
+    const updated: Save = {
+      ...save,
+      locations: save.locations.map((location) =>
+        location.id === locationId ? { ...location, ...changes, id: location.id } : location
+      ),
+      worldMemory:
+        changes.description === undefined
+          ? save.worldMemory
+          : {
+              ...save.worldMemory,
+              locationSummaries: {
+                ...save.worldMemory.locationSummaries,
+                [locationId]: changes.description
+              }
+            },
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async deleteLocation(saveId: string, locationId: string): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (
+      !save ||
+      !save.locations.some((location) => location.id === locationId) ||
+      save.characters.some((character) => character.locationId === locationId)
+    ) {
+      return undefined;
+    }
+
+    const locationSummaries = { ...save.worldMemory.locationSummaries };
+    delete locationSummaries[locationId];
+    const updated: Save = {
+      ...save,
+      locations: save.locations.filter((location) => location.id !== locationId),
+      worldMemory: {
+        ...save.worldMemory,
+        locationSummaries
+      },
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async createRelationship(saveId: string, input: CreateRelationshipInput): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || !relationshipCharactersExist(save, input.sourceCharacterId, input.targetCharacterId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      relationships: [...save.relationships, { ...input, id: id("relationship") }],
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async patchRelationship(saveId: string, relationshipId: string, patch: RelationshipPatch): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+    const relationship = save?.relationships.find((item) => item.id === relationshipId);
+
+    if (!save || !relationship) {
+      return undefined;
+    }
+
+    const changes = { ...patch };
+    delete changes.id;
+    const sourceCharacterId = changes.sourceCharacterId ?? relationship.sourceCharacterId;
+    const targetCharacterId = changes.targetCharacterId ?? relationship.targetCharacterId;
+
+    if (!relationshipCharactersExist(save, sourceCharacterId, targetCharacterId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      relationships: save.relationships.map((item) =>
+        item.id === relationshipId ? { ...item, ...changes, id: item.id } : item
+      ),
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
+    return this.readSave(saveId);
+  }
+
+  async deleteRelationship(saveId: string, relationshipId: string): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || !save.relationships.some((relationship) => relationship.id === relationshipId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      relationships: save.relationships.filter((relationship) => relationship.id !== relationshipId),
+      updatedAt: now()
+    };
+
+    await this.db.transaction(async (tx) => this.replaceSaveState(tx, updated));
     return this.readSave(saveId);
   }
 
@@ -861,6 +1055,14 @@ function buildSnapshotBeforeTurn(save: Save, turn: Turn): Save {
     },
     turns: save.turns.filter((item) => item.turnNumber < turn.turnNumber)
   };
+}
+
+function relationshipCharactersExist(save: Save, sourceCharacterId: string, targetCharacterId: string) {
+  return (
+    sourceCharacterId !== targetCharacterId &&
+    save.characters.some((character) => character.id === sourceCharacterId) &&
+    save.characters.some((character) => character.id === targetCharacterId)
+  );
 }
 
 function toIso(value: Date | string) {

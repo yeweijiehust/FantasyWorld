@@ -2,11 +2,16 @@ import type {
   Character,
   CreateSaveInput,
   CreateTurnInput,
+  CreateCharacterInput,
+  CreateLocationInput,
+  CreateRelationshipInput,
   JobStatus,
   Location,
+  LocationPatch,
   ModelConfig,
   CharacterPatch,
   Relationship,
+  RelationshipPatch,
   PatchTurnDraftInput,
   Save,
   SaveGenerationJob,
@@ -278,11 +283,211 @@ export class PrototypeStore implements FantasyWorldStore {
 
     const changes = { ...patch };
     delete changes.id;
+
+    if (changes.locationId && !save.locations.some((location) => location.id === changes.locationId)) {
+      return undefined;
+    }
+
     const updated: Save = {
       ...save,
       characters: save.characters.map((item) =>
         item.id === characterId ? { ...item, ...changes, id: item.id } : item
       ),
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  createCharacter(saveId: string, input: CreateCharacterInput) {
+    const save = this.saves.get(saveId);
+
+    if (!save || !save.locations.some((location) => location.id === input.locationId)) {
+      return undefined;
+    }
+
+    const character: Character = {
+      ...input,
+      id: id("character")
+    };
+    const updated: Save = {
+      ...save,
+      characters: [...save.characters, character],
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  deleteCharacter(saveId: string, characterId: string) {
+    const save = this.saves.get(saveId);
+
+    if (!save || !save.characters.some((character) => character.id === characterId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      characters: save.characters.filter((character) => character.id !== characterId),
+      relationships: save.relationships.filter(
+        (relationship) =>
+          relationship.sourceCharacterId !== characterId && relationship.targetCharacterId !== characterId
+      ),
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  createLocation(saveId: string, input: CreateLocationInput) {
+    const save = this.saves.get(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const location: Location = {
+      ...input,
+      id: id("location")
+    };
+    const updated: Save = {
+      ...save,
+      locations: [...save.locations, location],
+      worldMemory: {
+        ...save.worldMemory,
+        locationSummaries: {
+          ...save.worldMemory.locationSummaries,
+          [location.id]: location.description
+        }
+      },
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  patchLocation(saveId: string, locationId: string, patch: LocationPatch) {
+    const save = this.saves.get(saveId);
+
+    if (!save || !save.locations.some((location) => location.id === locationId)) {
+      return undefined;
+    }
+
+    const changes = { ...patch };
+    delete changes.id;
+    const updated: Save = {
+      ...save,
+      locations: save.locations.map((location) =>
+        location.id === locationId ? { ...location, ...changes, id: location.id } : location
+      ),
+      worldMemory:
+        changes.description === undefined
+          ? save.worldMemory
+          : {
+              ...save.worldMemory,
+              locationSummaries: {
+                ...save.worldMemory.locationSummaries,
+                [locationId]: changes.description
+              }
+            },
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  deleteLocation(saveId: string, locationId: string) {
+    const save = this.saves.get(saveId);
+
+    if (
+      !save ||
+      !save.locations.some((location) => location.id === locationId) ||
+      save.characters.some((character) => character.locationId === locationId)
+    ) {
+      return undefined;
+    }
+
+    const locationSummaries = { ...save.worldMemory.locationSummaries };
+    delete locationSummaries[locationId];
+    const updated: Save = {
+      ...save,
+      locations: save.locations.filter((location) => location.id !== locationId),
+      worldMemory: {
+        ...save.worldMemory,
+        locationSummaries
+      },
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  createRelationship(saveId: string, input: CreateRelationshipInput) {
+    const save = this.saves.get(saveId);
+
+    if (!save || !relationshipCharactersExist(save, input.sourceCharacterId, input.targetCharacterId)) {
+      return undefined;
+    }
+
+    const relationship: Relationship = {
+      ...input,
+      id: id("relationship")
+    };
+    const updated: Save = {
+      ...save,
+      relationships: [...save.relationships, relationship],
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  patchRelationship(saveId: string, relationshipId: string, patch: RelationshipPatch) {
+    const save = this.saves.get(saveId);
+    const relationship = save?.relationships.find((item) => item.id === relationshipId);
+
+    if (!save || !relationship) {
+      return undefined;
+    }
+
+    const changes = { ...patch };
+    delete changes.id;
+    const sourceCharacterId = changes.sourceCharacterId ?? relationship.sourceCharacterId;
+    const targetCharacterId = changes.targetCharacterId ?? relationship.targetCharacterId;
+
+    if (!relationshipCharactersExist(save, sourceCharacterId, targetCharacterId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      relationships: save.relationships.map((item) =>
+        item.id === relationshipId ? { ...item, ...changes, id: item.id } : item
+      ),
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, updated);
+    return structuredClone(updated);
+  }
+
+  deleteRelationship(saveId: string, relationshipId: string) {
+    const save = this.saves.get(saveId);
+
+    if (!save || !save.relationships.some((relationship) => relationship.id === relationshipId)) {
+      return undefined;
+    }
+
+    const updated: Save = {
+      ...save,
+      relationships: save.relationships.filter((relationship) => relationship.id !== relationshipId),
       updatedAt: now()
     };
 
@@ -765,4 +970,12 @@ function mergeRelationshipDraftUpdates(
   }
 
   return [...updates.values()];
+}
+
+function relationshipCharactersExist(save: Save, sourceCharacterId: string, targetCharacterId: string) {
+  return (
+    sourceCharacterId !== targetCharacterId &&
+    save.characters.some((character) => character.id === sourceCharacterId) &&
+    save.characters.some((character) => character.id === targetCharacterId)
+  );
 }

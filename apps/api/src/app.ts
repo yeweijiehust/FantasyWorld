@@ -9,12 +9,17 @@ import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import {
   ApiErrorSchema,
   CharacterPatchSchema,
+  CreateCharacterInputSchema,
+  CreateLocationInputSchema,
+  CreateRelationshipInputSchema,
   CreateSaveInputSchema,
   CreateTurnInputSchema,
+  LocationPatchSchema,
   ModelConfigSchema,
   ModelProbeInputSchema,
   ModelProbeResultSchema,
   PatchTurnDraftInputSchema,
+  RelationshipPatchSchema,
   SaveGenerationJobSchema,
   SaveImportSchema,
   SaveListItemSchema,
@@ -35,6 +40,8 @@ const GenerationParamsSchema = Type.Object({ id: Type.String() });
 const TurnJobParamsSchema = Type.Object({ id: Type.String() });
 const SaveParamsSchema = Type.Object({ id: Type.String() });
 const CharacterParamsSchema = Type.Object({ id: Type.String(), characterId: Type.String() });
+const LocationParamsSchema = Type.Object({ id: Type.String(), locationId: Type.String() });
+const RelationshipParamsSchema = Type.Object({ id: Type.String(), relationshipId: Type.String() });
 const LoginBodySchema = Type.Object({
   password: Type.String()
 });
@@ -78,9 +85,10 @@ export function buildApp(options: BuildAppOptions) {
 
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    const code = statusCode === 500 ? "internal_error" : error.validation ? "validation_error" : "request_error";
     reply.code(statusCode).send({
       error: {
-        code: statusCode === 500 ? "internal_error" : "request_error",
+        code,
         message: statusCode === 500 ? "Unexpected server error" : error.message
       }
     });
@@ -359,6 +367,30 @@ export function buildApp(options: BuildAppOptions) {
     }
   );
 
+  app.post(
+    "/api/saves/:id/characters",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        body: CreateCharacterInputSchema,
+        response: {
+          201: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.createCharacter(request.params.id, request.body);
+
+      if (!save) {
+        return sendError(reply, 404, "not_found", "Save or location not found");
+      }
+
+      reply.code(201);
+      return save;
+    }
+  );
+
   app.patch(
     "/api/saves/:id/characters/:characterId",
     {
@@ -374,6 +406,141 @@ export function buildApp(options: BuildAppOptions) {
     async (request, reply) => {
       const save = await store.patchCharacter(request.params.id, request.params.characterId, request.body);
       return save ?? sendError(reply, 404, "not_found", "Character not found");
+    }
+  );
+
+  app.delete(
+    "/api/saves/:id/characters/:characterId",
+    {
+      schema: {
+        params: CharacterParamsSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.deleteCharacter(request.params.id, request.params.characterId);
+      return save ?? sendError(reply, 404, "not_found", "Character not found");
+    }
+  );
+
+  app.post(
+    "/api/saves/:id/locations",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        body: CreateLocationInputSchema,
+        response: {
+          201: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.createLocation(request.params.id, request.body);
+
+      if (!save) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
+      reply.code(201);
+      return save;
+    }
+  );
+
+  app.patch(
+    "/api/saves/:id/locations/:locationId",
+    {
+      schema: {
+        params: LocationParamsSchema,
+        body: LocationPatchSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.patchLocation(request.params.id, request.params.locationId, request.body);
+      return save ?? sendError(reply, 404, "not_found", "Location not found");
+    }
+  );
+
+  app.delete(
+    "/api/saves/:id/locations/:locationId",
+    {
+      schema: {
+        params: LocationParamsSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.deleteLocation(request.params.id, request.params.locationId);
+      return save ?? sendError(reply, 404, "not_found", "Location not found or still in use");
+    }
+  );
+
+  app.post(
+    "/api/saves/:id/relationships",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        body: CreateRelationshipInputSchema,
+        response: {
+          201: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.createRelationship(request.params.id, request.body);
+
+      if (!save) {
+        return sendError(reply, 404, "not_found", "Save or relationship character not found");
+      }
+
+      reply.code(201);
+      return save;
+    }
+  );
+
+  app.patch(
+    "/api/saves/:id/relationships/:relationshipId",
+    {
+      schema: {
+        params: RelationshipParamsSchema,
+        body: RelationshipPatchSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.patchRelationship(request.params.id, request.params.relationshipId, request.body);
+      return save ?? sendError(reply, 404, "not_found", "Relationship not found");
+    }
+  );
+
+  app.delete(
+    "/api/saves/:id/relationships/:relationshipId",
+    {
+      schema: {
+        params: RelationshipParamsSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.deleteRelationship(request.params.id, request.params.relationshipId);
+      return save ?? sendError(reply, 404, "not_found", "Relationship not found");
     }
   );
 

@@ -4,7 +4,9 @@ import {
   type Character,
   type CreateSaveInput,
   type Language,
+  type Location,
   type PatchTurnDraftInput,
+  type Relationship,
   type Save,
   type SaveGenerationJob,
   type StateChange,
@@ -1050,19 +1052,10 @@ function TurnDraftEditor({ job, save }: { job: TurnJob; save: Save }) {
 
 function WorldDetails({ save }: { save: Save }) {
   const latestTurn = save.turns.at(-1);
-  const relationshipByCharacter = useMemo(
-    () =>
-      new Map(
-        save.relationships.map((relationship) => [
-          `${relationship.sourceCharacterId}:${relationship.targetCharacterId}`,
-          relationship
-        ])
-      ),
-    [save.relationships]
-  );
 
   return (
     <div className="grid gap-5">
+      <WorldSettingsEditor key={`${save.id}:${JSON.stringify(save.settings)}`} save={save} />
       <WorldMemoryEditor key={`${save.id}:${save.worldMemory.worldSummary}`} save={save} />
       <section>
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
@@ -1072,24 +1065,38 @@ function WorldDetails({ save }: { save: Save }) {
         <div className="grid gap-2">
           {save.characters.map((character) => (
             <CharacterCard
-              key={`${character.id}:${character.shortTermGoal}:${character.privateMemory.join("|")}`}
+              key={`${character.id}:${character.name}:${character.shortTermGoal}:${character.privateMemory.join("|")}`}
               saveId={save.id}
+              locations={save.locations}
               character={character}
             />
           ))}
+          <AddCharacterForm key={`${save.id}:${save.locations.map((location) => location.id).join("|")}`} save={save} />
+        </div>
+      </section>
+      <section>
+        <div className="mb-2 text-sm font-semibold text-slate-950">Locations</div>
+        <div className="grid gap-2">
+          {save.locations.map((location) => (
+            <LocationCard key={`${location.id}:${location.name}:${location.status}`} save={save} location={location} />
+          ))}
+          <AddLocationForm saveId={save.id} />
         </div>
       </section>
       <section>
         <div className="mb-2 text-sm font-semibold text-slate-950">Relationships</div>
-        <div className="grid gap-2 text-sm">
-          {[...relationshipByCharacter.values()].map((relationship) => (
-            <div key={relationship.id} className="rounded-md border border-slate-200 p-3">
-              <div className="font-medium">
-                {relationship.label} · {relationship.strength}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">{relationship.summary}</div>
-            </div>
+        <div className="grid gap-2">
+          {save.relationships.map((relationship) => (
+            <RelationshipCard
+              key={`${relationship.id}:${relationship.label}:${relationship.strength}`}
+              save={save}
+              relationship={relationship}
+            />
           ))}
+          <AddRelationshipForm
+            key={`${save.id}:${save.characters.map((character) => character.id).join("|")}`}
+            save={save}
+          />
         </div>
       </section>
       <section>
@@ -1144,19 +1151,126 @@ function WorldMemoryEditor({ save }: { save: Save }) {
   );
 }
 
-function CharacterCard({ saveId, character }: { saveId: string; character: Character }) {
+function WorldSettingsEditor({ save }: { save: Save }) {
   const queryClient = useQueryClient();
+  const [turnTimeScale, setTurnTimeScale] = useState(save.settings.turnTimeScale);
+  const [randomness, setRandomness] = useState(save.settings.randomness);
+  const [contentBoundary, setContentBoundary] = useState(save.settings.contentBoundary);
+  const [styleGuide, setStyleGuide] = useState(save.settings.styleGuide);
+  const settings = useMutation({
+    mutationFn: () =>
+      api.patchSave(save.id, {
+        settings: {
+          ...save.settings,
+          turnTimeScale,
+          randomness,
+          contentBoundary,
+          styleGuide
+        }
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+
+  return (
+    <section>
+      <div className="mb-2 text-sm font-semibold text-slate-950">World settings</div>
+      <div className="grid gap-2">
+        <label className="grid gap-1 text-xs font-medium text-slate-600">
+          Turn scale
+          <input
+            aria-label="World turn scale"
+            className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+            value={turnTimeScale}
+            onChange={(event) => setTurnTimeScale(event.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-xs font-medium text-slate-600">
+          Randomness
+          <input
+            aria-label="World randomness"
+            className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+            type="number"
+            min={0}
+            max={100}
+            value={randomness}
+            onChange={(event) => setRandomness(Number(event.target.value))}
+          />
+        </label>
+        <label className="grid gap-1 text-xs font-medium text-slate-600">
+          Content boundary
+          <input
+            aria-label="World content boundary"
+            className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+            value={contentBoundary}
+            onChange={(event) => setContentBoundary(event.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-xs font-medium text-slate-600">
+          Style guide
+          <textarea
+            aria-label="World style guide"
+            className="min-h-20 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+            value={styleGuide}
+            onChange={(event) => setStyleGuide(event.target.value)}
+          />
+        </label>
+      </div>
+      <button
+        className="mt-2 inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+        type="button"
+        disabled={settings.isPending}
+        onClick={() => settings.mutate()}
+      >
+        <SaveIcon size={14} />
+        Save settings
+      </button>
+      {settings.error ? <p className="mt-2 text-sm text-red-600">{settings.error.message}</p> : null}
+    </section>
+  );
+}
+
+function CharacterCard({
+  saveId,
+  locations,
+  character
+}: {
+  saveId: string;
+  locations: Location[];
+  character: Character;
+}) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(character.name);
+  const [profile, setProfile] = useState(character.profile);
+  const [personality, setPersonality] = useState(character.personality);
+  const [longTermGoal, setLongTermGoal] = useState(character.longTermGoal);
   const [shortTermGoal, setShortTermGoal] = useState(character.shortTermGoal);
+  const [locationId, setLocationId] = useState(character.locationId);
+  const [status, setStatus] = useState(character.status);
+  const [secrets, setSecrets] = useState(character.secrets.join("\n"));
   const [privateMemory, setPrivateMemory] = useState(character.privateMemory.join("\n"));
   const characterUpdate = useMutation({
     mutationFn: () =>
       api.patchCharacter(saveId, character.id, {
+        name,
+        profile,
+        personality,
+        longTermGoal,
         shortTermGoal,
-        privateMemory: privateMemory
-          .split("\n")
-          .map((item) => item.trim())
-          .filter(Boolean)
+        locationId,
+        status,
+        secrets: splitLines(secrets),
+        privateMemory: splitLines(privateMemory)
       }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", saveId] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const characterDelete = useMutation({
+    mutationFn: () => api.deleteCharacter(saveId, character.id),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["save", saveId] });
       await queryClient.invalidateQueries({ queryKey: ["saves"] });
@@ -1165,7 +1279,42 @@ function CharacterCard({ saveId, character }: { saveId: string; character: Chara
 
   return (
     <div className="rounded-md border border-slate-200 p-3">
-      <div className="font-medium text-slate-950">{character.name}</div>
+      <label className="grid gap-1 text-xs font-medium text-slate-600">
+        Name
+        <input
+          aria-label={`${character.name} name`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Profile
+        <textarea
+          aria-label={`${character.name} profile`}
+          className="min-h-16 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+          value={profile}
+          onChange={(event) => setProfile(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Personality
+        <input
+          aria-label={`${character.name} personality`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={personality}
+          onChange={(event) => setPersonality(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Long goal
+        <input
+          aria-label={`${character.name} long goal`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={longTermGoal}
+          onChange={(event) => setLongTermGoal(event.target.value)}
+        />
+      </label>
       <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
         Short goal
         <input
@@ -1173,6 +1322,39 @@ function CharacterCard({ saveId, character }: { saveId: string; character: Chara
           className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
           value={shortTermGoal}
           onChange={(event) => setShortTermGoal(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Location
+        <select
+          aria-label={`${character.name} location`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={locationId}
+          onChange={(event) => setLocationId(event.target.value)}
+        >
+          {locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Status
+        <input
+          aria-label={`${character.name} status`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Secrets
+        <textarea
+          aria-label={`${character.name} secrets`}
+          className="min-h-16 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+          value={secrets}
+          onChange={(event) => setSecrets(event.target.value)}
         />
       </label>
       <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
@@ -1184,18 +1366,355 @@ function CharacterCard({ saveId, character }: { saveId: string; character: Chara
           onChange={(event) => setPrivateMemory(event.target.value)}
         />
       </label>
-      <button
-        className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-        type="button"
-        disabled={characterUpdate.isPending}
-        onClick={() => characterUpdate.mutate()}
-      >
-        <SaveIcon size={14} />
-        Save character
-      </button>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          type="button"
+          disabled={characterUpdate.isPending}
+          onClick={() => characterUpdate.mutate()}
+        >
+          <SaveIcon size={14} />
+          Save character
+        </button>
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+          type="button"
+          disabled={characterDelete.isPending}
+          onClick={() => characterDelete.mutate()}
+        >
+          Delete
+        </button>
+      </div>
       {characterUpdate.error ? <p className="mt-2 text-sm text-red-600">{characterUpdate.error.message}</p> : null}
+      {characterDelete.error ? <p className="mt-2 text-sm text-red-600">{characterDelete.error.message}</p> : null}
     </div>
   );
+}
+
+function AddCharacterForm({ save }: { save: Save }) {
+  const queryClient = useQueryClient();
+  const firstLocation = save.locations[0];
+  const [name, setName] = useState("New character");
+  const [locationId, setLocationId] = useState(firstLocation?.id ?? "");
+  const add = useMutation({
+    mutationFn: () =>
+      api.createCharacter(save.id, {
+        name,
+        profile: "",
+        personality: "",
+        longTermGoal: "",
+        shortTermGoal: "",
+        locationId,
+        status: "Available",
+        secrets: [],
+        privateMemory: []
+      }),
+    onSuccess: async () => {
+      setName("New character");
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+
+  return (
+    <div className="rounded-md border border-dashed border-slate-300 p-3">
+      <div className="grid gap-2">
+        <input
+          aria-label="New character name"
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+        <select
+          aria-label="New character location"
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={locationId}
+          onChange={(event) => setLocationId(event.target.value)}
+        >
+          {save.locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <button
+        className="mt-2 inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+        type="button"
+        disabled={add.isPending || !locationId}
+        onClick={() => add.mutate()}
+      >
+        <Plus size={14} />
+        Add character
+      </button>
+      {add.error ? <p className="mt-2 text-sm text-red-600">{add.error.message}</p> : null}
+    </div>
+  );
+}
+
+function LocationCard({ save, location }: { save: Save; location: Location }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(location.name);
+  const [description, setDescription] = useState(location.description);
+  const [status, setStatus] = useState(location.status);
+  const update = useMutation({
+    mutationFn: () => api.patchLocation(save.id, location.id, { name, description, status }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const remove = useMutation({
+    mutationFn: () => api.deleteLocation(save.id, location.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+
+  return (
+    <div className="rounded-md border border-slate-200 p-3">
+      <label className="grid gap-1 text-xs font-medium text-slate-600">
+        Name
+        <input
+          aria-label={`${location.name} location name`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Description
+        <textarea
+          aria-label={`${location.name} location description`}
+          className="min-h-16 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Status
+        <input
+          aria-label={`${location.name} location status`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+        />
+      </label>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          type="button"
+          disabled={update.isPending}
+          onClick={() => update.mutate()}
+        >
+          <SaveIcon size={14} />
+          Save location
+        </button>
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+          type="button"
+          disabled={remove.isPending}
+          onClick={() => remove.mutate()}
+        >
+          Delete
+        </button>
+      </div>
+      {update.error ? <p className="mt-2 text-sm text-red-600">{update.error.message}</p> : null}
+      {remove.error ? <p className="mt-2 text-sm text-red-600">{remove.error.message}</p> : null}
+    </div>
+  );
+}
+
+function AddLocationForm({ saveId }: { saveId: string }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("New location");
+  const add = useMutation({
+    mutationFn: () => api.createLocation(saveId, { name, description: "", status: "Open" }),
+    onSuccess: async () => {
+      setName("New location");
+      await queryClient.invalidateQueries({ queryKey: ["save", saveId] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+
+  return (
+    <div className="rounded-md border border-dashed border-slate-300 p-3">
+      <input
+        aria-label="New location name"
+        className="h-8 w-full rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+      />
+      <button
+        className="mt-2 inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+        type="button"
+        disabled={add.isPending}
+        onClick={() => add.mutate()}
+      >
+        <Plus size={14} />
+        Add location
+      </button>
+      {add.error ? <p className="mt-2 text-sm text-red-600">{add.error.message}</p> : null}
+    </div>
+  );
+}
+
+function RelationshipCard({ save, relationship }: { save: Save; relationship: Relationship }) {
+  const queryClient = useQueryClient();
+  const [label, setLabel] = useState(relationship.label);
+  const [strength, setStrength] = useState(relationship.strength);
+  const [summary, setSummary] = useState(relationship.summary);
+  const characterName = (id: string) => save.characters.find((character) => character.id === id)?.name ?? id;
+  const update = useMutation({
+    mutationFn: () => api.patchRelationship(save.id, relationship.id, { label, strength, summary }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const remove = useMutation({
+    mutationFn: () => api.deleteRelationship(save.id, relationship.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+
+  return (
+    <div className="rounded-md border border-slate-200 p-3">
+      <div className="text-xs font-medium text-slate-500">
+        {characterName(relationship.sourceCharacterId)} {"->"} {characterName(relationship.targetCharacterId)}
+      </div>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Label
+        <input
+          aria-label={`${relationship.id} relationship label`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Strength
+        <input
+          aria-label={`${relationship.id} relationship strength`}
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          type="number"
+          min={-100}
+          max={100}
+          value={strength}
+          onChange={(event) => setStrength(Number(event.target.value))}
+        />
+      </label>
+      <label className="mt-2 grid gap-1 text-xs font-medium text-slate-600">
+        Summary
+        <textarea
+          aria-label={`${relationship.id} relationship summary`}
+          className="min-h-16 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+          value={summary}
+          onChange={(event) => setSummary(event.target.value)}
+        />
+      </label>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          type="button"
+          disabled={update.isPending}
+          onClick={() => update.mutate()}
+        >
+          <SaveIcon size={14} />
+          Save relationship
+        </button>
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+          type="button"
+          disabled={remove.isPending}
+          onClick={() => remove.mutate()}
+        >
+          Delete
+        </button>
+      </div>
+      {update.error ? <p className="mt-2 text-sm text-red-600">{update.error.message}</p> : null}
+      {remove.error ? <p className="mt-2 text-sm text-red-600">{remove.error.message}</p> : null}
+    </div>
+  );
+}
+
+function AddRelationshipForm({ save }: { save: Save }) {
+  const queryClient = useQueryClient();
+  const [sourceCharacterId, setSourceCharacterId] = useState(save.characters[0]?.id ?? "");
+  const [targetCharacterId, setTargetCharacterId] = useState(save.characters[1]?.id ?? save.characters[0]?.id ?? "");
+  const [label, setLabel] = useState("Contact");
+  const add = useMutation({
+    mutationFn: () =>
+      api.createRelationship(save.id, {
+        sourceCharacterId,
+        targetCharacterId,
+        label,
+        strength: 0,
+        summary: ""
+      }),
+    onSuccess: async () => {
+      setLabel("Contact");
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+
+  return (
+    <div className="rounded-md border border-dashed border-slate-300 p-3">
+      <div className="grid gap-2">
+        <select
+          aria-label="New relationship source"
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={sourceCharacterId}
+          onChange={(event) => setSourceCharacterId(event.target.value)}
+        >
+          {save.characters.map((character) => (
+            <option key={character.id} value={character.id}>
+              {character.name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="New relationship target"
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={targetCharacterId}
+          onChange={(event) => setTargetCharacterId(event.target.value)}
+        >
+          {save.characters.map((character) => (
+            <option key={character.id} value={character.id}>
+              {character.name}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="New relationship label"
+          className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+        />
+      </div>
+      <button
+        className="mt-2 inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+        type="button"
+        disabled={add.isPending || sourceCharacterId === targetCharacterId}
+        onClick={() => add.mutate()}
+      >
+        <Plus size={14} />
+        Add relationship
+      </button>
+      {add.error ? <p className="mt-2 text-sm text-red-600">{add.error.message}</p> : null}
+    </div>
+  );
+}
+
+function splitLines(value: string) {
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function EmptyWorld() {
