@@ -180,6 +180,7 @@ export const CreateSaveInputSchema = Type.Object({
   premise: Type.String({ minLength: 1 }),
   characterSeeds: Type.Array(Type.String({ minLength: 1 }), { minItems: 3, maxItems: 8 }),
   settings: SaveSettingsSchema,
+  idempotencyKey: Type.Optional(Type.String({ minLength: 1 })),
   modelOverride: Type.Optional(
     Type.Partial(
       Type.Object({
@@ -202,6 +203,8 @@ export type SaveGenerationDraft = Static<typeof SaveGenerationDraftSchema>;
 export const SaveGenerationJobSchema = Type.Object({
   id: IdSchema,
   status: JobStatusSchema,
+  phase: Type.Optional(Type.String()),
+  idempotencyKey: Type.Optional(Type.String()),
   draft: Type.Optional(SaveGenerationDraftSchema),
   error: Type.Optional(Type.String())
 });
@@ -217,6 +220,9 @@ export const TurnJobSchema = Type.Object({
   id: IdSchema,
   saveId: IdSchema,
   status: JobStatusSchema,
+  phase: Type.Optional(Type.String()),
+  idempotencyKey: Type.Optional(Type.String()),
+  input: Type.Optional(CreateTurnInputSchema),
   turn: Type.Optional(TurnSchema),
   error: Type.Optional(Type.String())
 });

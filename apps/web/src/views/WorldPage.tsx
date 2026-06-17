@@ -4,7 +4,9 @@ import {
   type Character,
   type CreateSaveInput,
   type Language,
-  type Save
+  type Save,
+  type SaveGenerationJob,
+  type TurnJob
 } from "@fantasy-world/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,12 +22,14 @@ import {
   Upload,
   Users
 } from "lucide-react";
-import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { useUiStore } from "../state/ui.js";
 
 const wizardSteps = ["Template", "World", "Cast", "Rules", "Draft"];
 const defaultTemplateInput = createTemplateSaveInput("fantasy-frontier", "zh");
+const generationJobStorageKey = "fantasyworld.currentGenerationJob";
+const turnJobStorageKey = (saveId: string) => `fantasyworld.turnJob.${saveId}`;
 
 type WizardValues = {
   templateId: string;
@@ -113,7 +117,7 @@ export function WorldPage() {
       </aside>
 
       <section className="min-h-[680px] rounded-lg border border-slate-200 bg-white">
-        {activeSave ? <Timeline save={activeSave} /> : <EmptyWorld />}
+        {activeSave ? <Timeline key={activeSave.id} save={activeSave} /> : <EmptyWorld />}
       </section>
 
       <aside className="rounded-lg border border-slate-200 bg-white p-4">
@@ -128,25 +132,53 @@ export function WorldPage() {
 }
 
 function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<void> }) {
-  const [step, setStep] = useState(0);
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState(() => (localStorage.getItem(generationJobStorageKey) ? 4 : 0));
   const [values, setValues] = useState<WizardValues>(() => toWizardValues(defaultTemplateInput));
   const [seedText, setSeedText] = useState(defaultTemplateInput.characterSeeds.join("\n"));
   const [formError, setFormError] = useState("");
+  const [generationJobId, setGenerationJobId] = useState(() => localStorage.getItem(generationJobStorageKey));
+  const generationJob = useQuery({
+    queryKey: ["generation-job", generationJobId],
+    queryFn: () => api.generationJob(generationJobId ?? ""),
+    enabled: Boolean(generationJobId)
+  });
   const generation = useMutation({
     mutationFn: api.createGenerationJob,
-    onSuccess: () => setStep(4)
+    onSuccess: (job) => {
+      localStorage.setItem(generationJobStorageKey, job.id);
+      setGenerationJobId(job.id);
+      queryClient.setQueryData(["generation-job", job.id], job);
+      setStep(4);
+    }
   });
   const [importError, setImportError] = useState("");
   const [importMessage, setImportMessage] = useState("");
   const accept = useMutation({
-    mutationFn: api.acceptGenerationJob,
+    mutationFn: (jobId: string) => api.acceptGenerationJob(jobId),
     onSuccess: async (save) => {
       const nextInput = createTemplateSaveInput(values.templateId, values.language);
       setValues(toWizardValues(nextInput, values));
       setSeedText(nextInput.characterSeeds.join("\n"));
       setStep(0);
+      localStorage.removeItem(generationJobStorageKey);
+      setGenerationJobId(null);
       generation.reset();
       await onCreated(save);
+    }
+  });
+  const cancelGeneration = useMutation({
+    mutationFn: (jobId: string) => api.cancelGenerationJob(jobId),
+    onSuccess: (job) => {
+      generation.reset();
+      queryClient.setQueryData(["generation-job", job.id], job);
+    }
+  });
+  const retryGeneration = useMutation({
+    mutationFn: (jobId: string) => api.retryGenerationJob(jobId),
+    onSuccess: (job) => {
+      generation.reset();
+      queryClient.setQueryData(["generation-job", job.id], job);
     }
   });
   const importSave = useMutation({
@@ -162,10 +194,32 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     }
   });
   const selectedTemplate = WORLD_TEMPLATES.find((template) => template.id === values.templateId) ?? WORLD_TEMPLATES[0];
+  const currentGenerationJob = generation.data ?? generationJob.data;
   const characterSeeds = seedText
     .split("\n")
     .map((seed) => seed.trim())
     .filter(Boolean);
+
+  useEffect(() => {
+    if (!generationJobId) {
+      return;
+    }
+
+    const source = new EventSource(`/api/save-generation-jobs/${generationJobId}/events`, { withCredentials: true });
+    const updateJob = (event: MessageEvent<string>) => {
+      const job = JSON.parse(event.data) as SaveGenerationJob;
+      queryClient.setQueryData(["generation-job", job.id], job);
+    };
+
+    source.addEventListener("snapshot", updateJob);
+    source.addEventListener("final", updateJob);
+    source.onerror = () => {
+      source.close();
+      void queryClient.invalidateQueries({ queryKey: ["generation-job", generationJobId] });
+    };
+
+    return () => source.close();
+  }, [generationJobId, queryClient]);
 
   const updateValue = <Key extends keyof WizardValues>(key: Key, value: WizardValues[Key]) => {
     setValues((current) => ({ ...current, [key]: value }));
@@ -197,6 +251,7 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       name: values.name.trim(),
       premise: values.premise.trim(),
       characterSeeds,
+      idempotencyKey: crypto.randomUUID(),
       settings: {
         language: values.language,
         turnTimeScale: values.turnTimeScale.trim(),
@@ -246,6 +301,8 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
   };
   const resetDraft = () => {
     generation.reset();
+    localStorage.removeItem(generationJobStorageKey);
+    setGenerationJobId(null);
     setStep(0);
   };
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -438,18 +495,18 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
               <Sparkles size={16} />
               Generate draft
             </button>
-            {generation.data?.draft ? (
+            {currentGenerationJob?.draft ? (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
                 <div className="font-semibold">Draft ready</div>
                 <div className="mt-1 text-emerald-800">
-                  {generation.data.draft.save.characters.length} characters ·{" "}
-                  {generation.data.draft.save.locations[0]?.name}
+                  {currentGenerationJob.draft.save.characters.length} characters ·{" "}
+                  {currentGenerationJob.draft.save.locations[0]?.name}
                 </div>
                 <div className="mt-2 text-xs text-emerald-800">
-                  {generation.data.draft.save.worldMemory.worldSummary}
+                  {currentGenerationJob.draft.save.worldMemory.worldSummary}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {generation.data.draft.save.characters.map((character) => (
+                  {currentGenerationJob.draft.save.characters.map((character) => (
                     <span key={character.id} className="rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-900">
                       {character.name}
                     </span>
@@ -459,10 +516,30 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
                   <button
                     className="h-8 rounded-md bg-emerald-700 px-3 text-white disabled:opacity-60"
                     type="button"
-                    disabled={accept.isPending}
-                    onClick={() => accept.mutate(generation.data.id)}
+                    disabled={
+                      accept.isPending ||
+                      currentGenerationJob.status === "cancelled" ||
+                      currentGenerationJob.status === "failed"
+                    }
+                    onClick={() => accept.mutate(currentGenerationJob.id)}
                   >
                     Accept draft
+                  </button>
+                  <button
+                    className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
+                    type="button"
+                    disabled={cancelGeneration.isPending || currentGenerationJob.status !== "needs_review"}
+                    onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
+                    type="button"
+                    disabled={retryGeneration.isPending || currentGenerationJob.status === "needs_review"}
+                    onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
+                  >
+                    Retry
                   </button>
                   <button className="h-8 rounded-md bg-white px-3 text-emerald-800" type="button" onClick={resetDraft}>
                     Revise
@@ -491,6 +568,8 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       {formError ? <p className="mt-2 text-sm text-red-600">{formError}</p> : null}
       {generation.error ? <p className="mt-2 text-sm text-red-600">{generation.error.message}</p> : null}
       {accept.error ? <p className="mt-2 text-sm text-red-600">{accept.error.message}</p> : null}
+      {cancelGeneration.error ? <p className="mt-2 text-sm text-red-600">{cancelGeneration.error.message}</p> : null}
+      {retryGeneration.error ? <p className="mt-2 text-sm text-red-600">{retryGeneration.error.message}</p> : null}
       <label className="mt-3 grid gap-2 text-xs font-medium text-slate-600">
         <span className="inline-flex items-center gap-2">
           <Upload size={14} />
@@ -513,21 +592,36 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
 function Timeline({ save }: { save: Save }) {
   const queryClient = useQueryClient();
   const [instruction, setInstruction] = useState("");
+  const [turnJobId, setTurnJobId] = useState(() => localStorage.getItem(turnJobStorageKey(save.id)));
   const latestTurn = save.turns.at(-1);
+  const turnJob = useQuery({
+    queryKey: ["turn-job", turnJobId],
+    queryFn: () => api.turnJob(turnJobId ?? ""),
+    enabled: Boolean(turnJobId)
+  });
+  const refreshSave = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+    await queryClient.invalidateQueries({ queryKey: ["saves"] });
+  }, [queryClient, save.id]);
   const turn = useMutation({
     mutationFn: () => api.createTurn(save.id, { gmInstruction: instruction, idempotencyKey: crypto.randomUUID() }),
-    onSuccess: async () => {
+    onSuccess: async (job) => {
       setInstruction("");
+      localStorage.setItem(turnJobStorageKey(save.id), job.id);
+      setTurnJobId(job.id);
+      queryClient.setQueryData(["turn-job", job.id], job);
       await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
       await queryClient.invalidateQueries({ queryKey: ["saves"] });
     }
   });
+  const activeTurnJob = turn.data ?? turnJob.data;
+  const activeTurnJobIsOpen =
+    activeTurnJob?.status === "queued" ||
+    activeTurnJob?.status === "running" ||
+    activeTurnJob?.status === "needs_review";
   const rollback = useMutation({
     mutationFn: () => api.rollbackSave(save.id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
-      await queryClient.invalidateQueries({ queryKey: ["saves"] });
-    }
+    onSuccess: refreshSave
   });
   const acceptTurn = useMutation({
     mutationFn: () => {
@@ -538,14 +632,61 @@ function Timeline({ save }: { save: Save }) {
       return api.acceptTurn(latestTurn.id);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
-      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+      localStorage.removeItem(turnJobStorageKey(save.id));
+      setTurnJobId(null);
+      turn.reset();
+      await refreshSave();
+    }
+  });
+  const cancelTurn = useMutation({
+    mutationFn: (jobId: string) => api.cancelTurnJob(jobId),
+    onSuccess: async (job) => {
+      queryClient.setQueryData(["turn-job", job.id], job);
+      localStorage.removeItem(turnJobStorageKey(save.id));
+      setTurnJobId(null);
+      turn.reset();
+      await refreshSave();
+    }
+  });
+  const retryTurn = useMutation({
+    mutationFn: (jobId: string) => api.retryTurnJob(jobId),
+    onSuccess: async (job) => {
+      localStorage.setItem(turnJobStorageKey(save.id), job.id);
+      setTurnJobId(job.id);
+      turn.reset();
+      queryClient.setQueryData(["turn-job", job.id], job);
+      await refreshSave();
     }
   });
   const exportSave = useMutation({
     mutationFn: () => api.exportSave(save.id),
     onSuccess: (payload) => downloadJson(`${save.name}.fantasyworld.json`, payload)
   });
+
+  useEffect(() => {
+    if (!turnJobId) {
+      return;
+    }
+
+    const source = new EventSource(`/api/turn-jobs/${turnJobId}/events`, { withCredentials: true });
+    const updateJob = (event: MessageEvent<string>) => {
+      const job = JSON.parse(event.data) as TurnJob;
+      queryClient.setQueryData(["turn-job", job.id], job);
+
+      if (job.status === "needs_review" || job.status === "cancelled" || job.status === "accepted") {
+        void refreshSave();
+      }
+    };
+
+    source.addEventListener("snapshot", updateJob);
+    source.addEventListener("final", updateJob);
+    source.onerror = () => {
+      source.close();
+      void queryClient.invalidateQueries({ queryKey: ["turn-job", turnJobId] });
+    };
+
+    return () => source.close();
+  }, [turnJobId, queryClient, refreshSave]);
 
   return (
     <div className="flex min-h-[680px] flex-col">
@@ -627,7 +768,7 @@ function Timeline({ save }: { save: Save }) {
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-60"
               type="button"
-              disabled={turn.isPending}
+              disabled={turn.isPending || activeTurnJobIsOpen}
               onClick={() => turn.mutate()}
             >
               <Play size={16} />
@@ -644,16 +785,40 @@ function Timeline({ save }: { save: Save }) {
                 {latestTurn.status === "accepted" ? "Turn accepted" : "Accept turn"}
               </button>
             ) : null}
+            {activeTurnJob ? (
+              <>
+                <button
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  type="button"
+                  disabled={cancelTurn.isPending || activeTurnJob.status !== "needs_review"}
+                  onClick={() => cancelTurn.mutate(activeTurnJob.id)}
+                >
+                  Cancel job
+                </button>
+                <button
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  type="button"
+                  disabled={retryTurn.isPending || activeTurnJob.status === "needs_review"}
+                  onClick={() => retryTurn.mutate(activeTurnJob.id)}
+                >
+                  Retry job
+                </button>
+              </>
+            ) : null}
           </div>
           <div className="text-xs text-slate-500">
-            {latestTurn
-              ? `${latestTurn.callSummary.calls} call · ~${latestTurn.callSummary.estimatedTokens} tokens`
-              : "Mock LLM ready"}
+            {activeTurnJob
+              ? `Job ${activeTurnJob.status}${activeTurnJob.phase ? ` · ${activeTurnJob.phase}` : ""}`
+              : latestTurn
+                ? `${latestTurn.callSummary.calls} call · ~${latestTurn.callSummary.estimatedTokens} tokens`
+                : "Mock LLM ready"}
           </div>
         </div>
         {turn.error ? <p className="mt-2 text-sm text-red-600">{turn.error.message}</p> : null}
         {rollback.error ? <p className="mt-2 text-sm text-red-600">{rollback.error.message}</p> : null}
         {acceptTurn.error ? <p className="mt-2 text-sm text-red-600">{acceptTurn.error.message}</p> : null}
+        {cancelTurn.error ? <p className="mt-2 text-sm text-red-600">{cancelTurn.error.message}</p> : null}
+        {retryTurn.error ? <p className="mt-2 text-sm text-red-600">{retryTurn.error.message}</p> : null}
         {exportSave.error ? <p className="mt-2 text-sm text-red-600">{exportSave.error.message}</p> : null}
       </div>
     </div>

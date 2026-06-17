@@ -25,6 +25,8 @@ export type FantasyWorldStore = {
   getSave(saveId: string): Save | undefined | Promise<Save | undefined>;
   createGenerationJob(input: CreateSaveInput): SaveGenerationJob | Promise<SaveGenerationJob>;
   getGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
+  cancelGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
+  retryGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   acceptGenerationJob(jobId: string): Save | undefined | Promise<Save | undefined>;
   importSave(input: SaveImport): Save | Promise<Save>;
   patchSave(
@@ -37,6 +39,8 @@ export type FantasyWorldStore = {
     patch: CharacterPatch
   ): Save | undefined | Promise<Save | undefined>;
   createTurnJob(saveId: string, input: CreateTurnInput): TurnJob | undefined | Promise<TurnJob | undefined>;
+  cancelTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
+  retryTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   acceptTurn(turnId: string): Save | undefined | Promise<Save | undefined>;
   rollbackSave(saveId: string): Save | undefined | Promise<Save | undefined>;
   getTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
