@@ -1,11 +1,16 @@
 import type {
   CharacterPatch,
+  CreateCharacterInput,
+  CreateLocationInput,
+  CreateRelationshipInput,
   CreateSaveInput,
   CreateTurnInput,
+  LocationPatch,
   ModelConfig,
   ModelProbeInput,
   ModelProbeResult,
   PatchTurnDraftInput,
+  RelationshipPatch,
   Save,
   SaveImport,
   SaveGenerationJob,
@@ -58,6 +63,22 @@ export const api = {
   rollbackSave: (id: string) => request<Save>(`/api/saves/${id}/rollback`, { method: "POST" }),
   patchCharacter: (saveId: string, characterId: string, body: CharacterPatch) =>
     request<Save>(`/api/saves/${saveId}/characters/${characterId}`, { method: "PATCH", body }),
+  createCharacter: (saveId: string, body: CreateCharacterInput) =>
+    request<Save>(`/api/saves/${saveId}/characters`, { method: "POST", body }),
+  deleteCharacter: (saveId: string, characterId: string) =>
+    request<Save>(`/api/saves/${saveId}/characters/${characterId}`, { method: "DELETE" }),
+  createLocation: (saveId: string, body: CreateLocationInput) =>
+    request<Save>(`/api/saves/${saveId}/locations`, { method: "POST", body }),
+  patchLocation: (saveId: string, locationId: string, body: LocationPatch) =>
+    request<Save>(`/api/saves/${saveId}/locations/${locationId}`, { method: "PATCH", body }),
+  deleteLocation: (saveId: string, locationId: string) =>
+    request<Save>(`/api/saves/${saveId}/locations/${locationId}`, { method: "DELETE" }),
+  createRelationship: (saveId: string, body: CreateRelationshipInput) =>
+    request<Save>(`/api/saves/${saveId}/relationships`, { method: "POST", body }),
+  patchRelationship: (saveId: string, relationshipId: string, body: RelationshipPatch) =>
+    request<Save>(`/api/saves/${saveId}/relationships/${relationshipId}`, { method: "PATCH", body }),
+  deleteRelationship: (saveId: string, relationshipId: string) =>
+    request<Save>(`/api/saves/${saveId}/relationships/${relationshipId}`, { method: "DELETE" }),
   createGenerationJob: (body: CreateSaveInput) =>
     request<SaveGenerationJob>("/api/save-generation-jobs", { method: "POST", body }),
   generationJob: (id: string) => request<SaveGenerationJob>(`/api/save-generation-jobs/${id}`),

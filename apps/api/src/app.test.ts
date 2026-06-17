@@ -839,6 +839,245 @@ describe("FantasyWorld API prototype", () => {
 
     await app.close();
   });
+
+  it("edits world entities and uses edited state in later turns", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+    const save = await createAcceptedSave(app, cookie, "世界编辑器测试");
+
+    const settings = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/settings`,
+      headers: {
+        cookie
+      },
+      payload: {
+        ...save.settings,
+        randomness: 67,
+        contentBoundary: "PG",
+        styleGuide: "编辑器测试风格"
+      }
+    });
+
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json<Save>().settings.randomness).toBe(67);
+
+    const location = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/locations`,
+      headers: {
+        cookie
+      },
+      payload: {
+        name: "暗潮码头",
+        description: "潮声下藏着新的线索",
+        status: "开放"
+      }
+    });
+
+    expect(location.statusCode).toBe(201);
+    const locationState = location.json<Save>();
+    const newLocation = locationState.locations.find((item) => item.name === "暗潮码头");
+    const firstCharacter = locationState.characters[0];
+    const secondCharacter = locationState.characters[1];
+
+    if (!newLocation || !firstCharacter || !secondCharacter) {
+      throw new Error("Missing edited test fixtures");
+    }
+
+    const invalidCharacterPatch = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/characters/${firstCharacter.id}`,
+      headers: {
+        cookie
+      },
+      payload: {
+        locationId: "missing-location"
+      }
+    });
+
+    expect(invalidCharacterPatch.statusCode).toBe(404);
+
+    const emptyCharacterName = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/characters/${firstCharacter.id}`,
+      headers: {
+        cookie
+      },
+      payload: {
+        name: ""
+      }
+    });
+
+    expect(emptyCharacterName.statusCode).toBe(400);
+    expect(emptyCharacterName.json<{ error: { code: string } }>().error.code).toBe("validation_error");
+
+    const emptyLocationName = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/locations/${newLocation.id}`,
+      headers: {
+        cookie
+      },
+      payload: {
+        name: ""
+      }
+    });
+
+    expect(emptyLocationName.statusCode).toBe(400);
+    expect(emptyLocationName.json<{ error: { code: string } }>().error.code).toBe("validation_error");
+
+    const character = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/characters/${firstCharacter.id}`,
+      headers: {
+        cookie
+      },
+      payload: {
+        name: "编辑后的艾琳",
+        profile: "编辑后的角色档案",
+        personality: "冷静，谨慎",
+        longTermGoal: "守住暗潮码头",
+        shortTermGoal: "追查编辑后的线索",
+        locationId: newLocation.id,
+        status: "调查中",
+        secrets: ["编辑后的秘密"],
+        privateMemory: ["编辑后的私有记忆"]
+      }
+    });
+
+    expect(character.statusCode).toBe(200);
+    expect(character.json<Save>().characters[0]?.name).toBe("编辑后的艾琳");
+    expect(character.json<Save>().characters[0]?.locationId).toBe(newLocation.id);
+
+    const extraCharacter = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/characters`,
+      headers: {
+        cookie
+      },
+      payload: {
+        name: "新增角色",
+        profile: "新增角色档案",
+        personality: "敏锐",
+        longTermGoal: "找到出口",
+        shortTermGoal: "建立联系",
+        locationId: newLocation.id,
+        status: "可行动",
+        secrets: ["新增秘密"],
+        privateMemory: ["新增记忆"]
+      }
+    });
+
+    expect(extraCharacter.statusCode).toBe(201);
+    const extraCharacterId = extraCharacter.json<Save>().characters.find((item) => item.name === "新增角色")?.id;
+
+    if (!extraCharacterId) {
+      throw new Error("Missing extra character id");
+    }
+
+    const relationship = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/relationships`,
+      headers: {
+        cookie
+      },
+      payload: {
+        sourceCharacterId: firstCharacter.id,
+        targetCharacterId: secondCharacter.id,
+        label: "编辑关系",
+        strength: 55,
+        summary: "编辑后的关系摘要"
+      }
+    });
+
+    expect(relationship.statusCode).toBe(201);
+    const relationshipId = relationship.json<Save>().relationships.find((item) => item.label === "编辑关系")?.id;
+
+    if (!relationshipId) {
+      throw new Error("Missing relationship id");
+    }
+
+    const emptyRelationshipLabel = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/relationships/${relationshipId}`,
+      headers: {
+        cookie
+      },
+      payload: {
+        label: ""
+      }
+    });
+
+    expect(emptyRelationshipLabel.statusCode).toBe(400);
+    expect(emptyRelationshipLabel.json<{ error: { code: string } }>().error.code).toBe("validation_error");
+
+    const patchedRelationship = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}/relationships/${relationshipId}`,
+      headers: {
+        cookie
+      },
+      payload: {
+        strength: 61,
+        summary: "再次编辑后的关系摘要"
+      }
+    });
+
+    expect(patchedRelationship.statusCode).toBe(200);
+    expect(patchedRelationship.json<Save>().relationships.find((item) => item.id === relationshipId)?.strength).toBe(
+      61
+    );
+
+    const deletedRelationship = await app.inject({
+      method: "DELETE",
+      url: `/api/saves/${save.id}/relationships/${relationshipId}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(deletedRelationship.statusCode).toBe(200);
+    expect(deletedRelationship.json<Save>().relationships.some((item) => item.id === relationshipId)).toBe(false);
+
+    const deletedCharacter = await app.inject({
+      method: "DELETE",
+      url: `/api/saves/${save.id}/characters/${extraCharacterId}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(deletedCharacter.statusCode).toBe(200);
+    expect(deletedCharacter.json<Save>().characters.some((item) => item.id === extraCharacterId)).toBe(false);
+
+    const occupiedLocationDelete = await app.inject({
+      method: "DELETE",
+      url: `/api/saves/${save.id}/locations/${newLocation.id}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(occupiedLocationDelete.statusCode).toBe(404);
+
+    const turn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        idempotencyKey: "world-editor-turn"
+      }
+    });
+    const turnJob = turn.json<TurnJob>();
+
+    expect(turn.statusCode).toBe(201);
+    expect(turnJob.turn?.events[0]?.body).toContain("编辑后的私有记忆");
+    expect(turnJob.turn?.events[0]?.dialogue?.some((line) => line.line.includes("追查编辑后的线索"))).toBe(true);
+
+    await app.close();
+  });
 });
 
 const describeDb = process.env.RUN_DB_TESTS === "1" ? describe : describe.skip;

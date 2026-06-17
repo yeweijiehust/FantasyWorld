@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 
 export const IdSchema = Type.String({ minLength: 1 });
+export const NonEmptyStringSchema = Type.String({ minLength: 1 });
 
 export const LanguageSchema = Type.Union([Type.Literal("zh"), Type.Literal("en")]);
 export type Language = Static<typeof LanguageSchema>;
@@ -19,15 +20,25 @@ export const RelationshipSchema = Type.Object({
   id: IdSchema,
   sourceCharacterId: IdSchema,
   targetCharacterId: IdSchema,
-  label: Type.String(),
+  label: NonEmptyStringSchema,
   strength: Type.Number({ minimum: -100, maximum: 100 }),
   summary: Type.String()
 });
 export type Relationship = Static<typeof RelationshipSchema>;
+export const RelationshipPatchSchema = Type.Partial(RelationshipSchema);
+export type RelationshipPatch = Static<typeof RelationshipPatchSchema>;
+export const CreateRelationshipInputSchema = Type.Object({
+  sourceCharacterId: IdSchema,
+  targetCharacterId: IdSchema,
+  label: NonEmptyStringSchema,
+  strength: Type.Number({ minimum: -100, maximum: 100 }),
+  summary: Type.String()
+});
+export type CreateRelationshipInput = Static<typeof CreateRelationshipInputSchema>;
 
 export const CharacterSchema = Type.Object({
   id: IdSchema,
-  name: Type.String(),
+  name: NonEmptyStringSchema,
   profile: Type.String(),
   personality: Type.String(),
   longTermGoal: Type.String(),
@@ -40,16 +51,34 @@ export const CharacterSchema = Type.Object({
 export type Character = Static<typeof CharacterSchema>;
 export const CharacterPatchSchema = Type.Partial(CharacterSchema);
 export type CharacterPatch = Static<typeof CharacterPatchSchema>;
+export const CreateCharacterInputSchema = Type.Object({
+  name: NonEmptyStringSchema,
+  profile: Type.String(),
+  personality: Type.String(),
+  longTermGoal: Type.String(),
+  shortTermGoal: Type.String(),
+  locationId: IdSchema,
+  status: Type.String(),
+  secrets: Type.Array(Type.String()),
+  privateMemory: Type.Array(Type.String())
+});
+export type CreateCharacterInput = Static<typeof CreateCharacterInputSchema>;
 
 export const LocationSchema = Type.Object({
   id: IdSchema,
-  name: Type.String(),
+  name: NonEmptyStringSchema,
   description: Type.String(),
   status: Type.String()
 });
 export type Location = Static<typeof LocationSchema>;
 export const LocationPatchSchema = Type.Partial(LocationSchema);
 export type LocationPatch = Static<typeof LocationPatchSchema>;
+export const CreateLocationInputSchema = Type.Object({
+  name: NonEmptyStringSchema,
+  description: Type.String(),
+  status: Type.String()
+});
+export type CreateLocationInput = Static<typeof CreateLocationInputSchema>;
 
 export const ModelConfigSchema = Type.Object({
   baseUrl: Type.String(),
