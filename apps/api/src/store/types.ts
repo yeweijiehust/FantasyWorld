@@ -3,6 +3,7 @@ import type {
   CreateSaveInput,
   CreateTurnInput,
   ModelConfig,
+  PatchTurnDraftInput,
   Save,
   SaveGenerationJob,
   SaveImport,
@@ -39,6 +40,7 @@ export type FantasyWorldStore = {
     patch: CharacterPatch
   ): Save | undefined | Promise<Save | undefined>;
   createTurnJob(saveId: string, input: CreateTurnInput): TurnJob | undefined | Promise<TurnJob | undefined>;
+  patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined | Promise<TurnJob | undefined>;
   cancelTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   retryTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   acceptTurn(turnId: string): Save | undefined | Promise<Save | undefined>;

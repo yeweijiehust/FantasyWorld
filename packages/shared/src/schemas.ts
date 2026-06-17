@@ -290,6 +290,45 @@ export const CreateTurnInputSchema = Type.Object({
 });
 export type CreateTurnInput = Static<typeof CreateTurnInputSchema>;
 
+export const TurnDraftCharacterUpdateSchema = Type.Object({
+  characterId: IdSchema,
+  status: Type.Optional(Type.String()),
+  longTermGoal: Type.Optional(Type.String()),
+  shortTermGoal: Type.Optional(Type.String()),
+  privateMemory: Type.Optional(Type.Array(Type.String()))
+});
+export type TurnDraftCharacterUpdate = Static<typeof TurnDraftCharacterUpdateSchema>;
+
+export const TurnDraftRelationshipUpdateSchema = Type.Object({
+  relationshipId: IdSchema,
+  strength: Type.Optional(Type.Number({ minimum: -100, maximum: 100 })),
+  summary: Type.Optional(Type.String())
+});
+export type TurnDraftRelationshipUpdate = Static<typeof TurnDraftRelationshipUpdateSchema>;
+
+export const TurnDraftStateSchema = Type.Object({
+  worldMemory: Type.Object({
+    timelineEntry: Type.String({ minLength: 1 }),
+    summaryDelta: Type.String({ minLength: 1 })
+  }),
+  characterUpdates: Type.Array(TurnDraftCharacterUpdateSchema),
+  relationshipUpdates: Type.Array(TurnDraftRelationshipUpdateSchema)
+});
+export type TurnDraftState = Static<typeof TurnDraftStateSchema>;
+
+export const PatchTurnDraftInputSchema = Type.Object({
+  event: Type.Optional(
+    Type.Object({
+      title: Type.Optional(Type.String({ minLength: 1 })),
+      body: Type.Optional(Type.String({ minLength: 1 }))
+    })
+  ),
+  stateChanges: Type.Optional(Type.Array(StateChangeSchema, { minItems: 1 })),
+  characterUpdates: Type.Optional(Type.Array(TurnDraftCharacterUpdateSchema)),
+  relationshipUpdates: Type.Optional(Type.Array(TurnDraftRelationshipUpdateSchema))
+});
+export type PatchTurnDraftInput = Static<typeof PatchTurnDraftInputSchema>;
+
 export const TurnJobSchema = Type.Object({
   id: IdSchema,
   saveId: IdSchema,
@@ -298,6 +337,7 @@ export const TurnJobSchema = Type.Object({
   idempotencyKey: Type.Optional(Type.String()),
   input: Type.Optional(CreateTurnInputSchema),
   turn: Type.Optional(TurnSchema),
+  draftState: Type.Optional(TurnDraftStateSchema),
   error: Type.Optional(Type.String())
 });
 export type TurnJob = Static<typeof TurnJobSchema>;

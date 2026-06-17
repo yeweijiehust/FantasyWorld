@@ -14,6 +14,7 @@ import {
   ModelConfigSchema,
   ModelProbeInputSchema,
   ModelProbeResultSchema,
+  PatchTurnDraftInputSchema,
   SaveGenerationJobSchema,
   SaveImportSchema,
   SaveListItemSchema,
@@ -544,6 +545,24 @@ export function buildApp(options: BuildAppOptions) {
       return sendJobSse(reply, async () => store.getTurnJob(request.params.id), {
         error: { code: "not_found", message: "Turn job not found" }
       });
+    }
+  );
+
+  app.patch(
+    "/api/turn-jobs/:id/draft",
+    {
+      schema: {
+        params: TurnJobParamsSchema,
+        body: PatchTurnDraftInputSchema,
+        response: {
+          200: TurnJobSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const job = await store.patchTurnDraft(request.params.id, request.body);
+      return job ?? sendError(reply, 404, "not_found", "Editable turn draft not found");
     }
   );
 
