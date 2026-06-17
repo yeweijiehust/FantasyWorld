@@ -203,7 +203,8 @@ FantasyWorld/
   - 公开仓库中不得提交真实密钥、生产配置或真实用户存档。
 - Render 使用 `render.yaml` 声明 Web Service、build/start 命令、数据库和环境变量占位。
 - Render pre-deploy 执行 Drizzle migrations。
-- Render 连接 GitHub 仓库；`main` required checks 通过并合并后触发 Render 自动部署。
+- Render 连接 GitHub 仓库、填写生产环境变量和触发首次部署都由用户手动完成；项目实现侧只准备配置和提醒清单。
+- 用户完成 Render 连接后，`main` required checks 通过并合并会触发 Render 自动部署。
 - GitHub Actions 不直接调用 Render API，不在 GitHub Secrets 中保存 Render 部署密钥。
 
 ## GitHub Actions
@@ -238,7 +239,8 @@ FantasyWorld/
 - Compatibility tests：覆盖当前版本导入、旧版本迁移、未知版本拒绝、模型能力探测降级和随机 seed 复现。
 - GitHub Actions checks：PR 自动运行 `ci.yml` 并阻塞不合格 merge；`security.yml` 检查依赖和泄密风险；`e2e.yml`
   可手动触发。
-- Deployment checks：Render 在 `main` 合并后自动部署；部署完成后检查 `/api/health`。
+- Deployment checks：用户手动完成 Render 连接和首次部署；后续 `main` 合并触发 Render 自动部署，部署完成后由用户检查
+  `/api/health`。
 
 ## Assumptions And Defaults
 

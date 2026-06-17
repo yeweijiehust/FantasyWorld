@@ -12,6 +12,8 @@ import {
   CreateSaveInputSchema,
   CreateTurnInputSchema,
   ModelConfigSchema,
+  ModelProbeInputSchema,
+  ModelProbeResultSchema,
   SaveGenerationJobSchema,
   SaveImportSchema,
   SaveListItemSchema,
@@ -23,6 +25,7 @@ import Fastify, { type FastifyError } from "fastify";
 import { Type } from "typebox";
 import { verifyPassword } from "./auth/password.js";
 import type { AppEnv } from "./config/env.js";
+import { LlmService } from "./llm/service.js";
 import { prototypeStore } from "./store/prototype-store.js";
 import type { FantasyWorldStore } from "./store/types.js";
 
@@ -38,7 +41,10 @@ const LoginBodySchema = Type.Object({
 const ModelConfigUpdateSchema = Type.Object({
   baseUrl: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
-  apiKey: Type.Optional(Type.String())
+  apiKey: Type.Optional(Type.String()),
+  supportsJsonMode: Type.Optional(Type.Boolean()),
+  supportsUsage: Type.Optional(Type.Boolean()),
+  supportsStream: Type.Optional(Type.Boolean())
 });
 
 const SavePatchSchema = Type.Partial(
@@ -53,10 +59,12 @@ const SavePatchSchema = Type.Partial(
 type BuildAppOptions = {
   env: AppEnv;
   store?: FantasyWorldStore;
+  llmService?: LlmService;
 };
 
 export function buildApp(options: BuildAppOptions) {
   const store = options.store ?? prototypeStore;
+  const llmService = options.llmService ?? new LlmService(store);
   const logger =
     options.env.nodeEnv === "test"
       ? false
@@ -203,6 +211,19 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request) => store.updateModelConfig(request.body)
+  );
+
+  app.post(
+    "/api/model-config/probe",
+    {
+      schema: {
+        body: ModelProbeInputSchema,
+        response: {
+          200: ModelProbeResultSchema
+        }
+      }
+    },
+    async (request) => llmService.probeModel(request.body)
   );
 
   app.get(

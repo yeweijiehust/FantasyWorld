@@ -57,7 +57,8 @@
 - 仓库基础文件：
   - 实现前必须先建立 `.gitignore` 和 `.gitattributes`。
   - `.gitignore` 必须忽略 Node 依赖、真实环境变量、构建产物、缓存、测试报告、临时目录和本地 IDE/OS 文件。
-  - `.gitignore` 不得误忽略 `.env.example`、`pnpm-lock.yaml`、`.github/workflows/*.yml`、`render.yaml`、Docker Compose、Drizzle schema 或 migrations。
+  - `.gitignore` 不得误忽略 `.env.example`、`pnpm-lock.yaml`、`.github/workflows/*.yml`、`render.yaml`、Docker
+    Compose、Drizzle schema 或 migrations。
   - `.gitattributes` 默认固定文本文件为 LF，Windows 脚本可显式使用 CRLF。
   - 公开仓库暂不添加 LICENSE，默认保留权利；未来决定开源授权时再单独讨论。
 - 依赖：
@@ -102,6 +103,7 @@
   - 必须说明计划修改范围。
   - 不得覆盖未理解的用户改动。
   - 不得执行 destructive git 命令，除非用户明确要求。
+  - 不得登录 Render、触发生产部署、代填生产环境变量或保存生产密钥；Step 13 只负责提醒用户手动部署和核对清单。
 - 文档：
   - `plans/` 是项目决策来源。
   - 产品、技术栈、API、数据库、LLM 推演、测试门禁、部署或工作流发生变化时必须同步文档。
@@ -111,6 +113,7 @@
 
 ## Assumptions
 
-- 具体脚本名后续实现时固定为根目录统一命令，例如 `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`、`pnpm test:e2e`。
+- 具体脚本名后续实现时固定为根目录统一命令，例如
+  `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`、`pnpm test:e2e`。
 - 项目初期仍是单人/单实例 MVP，但工作流按可持续协作标准设计。
 - 首版不做应用内自动云备份，依赖存档 JSON 导入/导出和部署层数据库备份。

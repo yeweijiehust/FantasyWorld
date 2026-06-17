@@ -20,12 +20,27 @@ export function SettingsPage() {
     }
   });
   const update = useMutation({
-    mutationFn: api.updateModelConfig,
-    onSuccess: async () => {
+    mutationFn: async (values: SettingsForm) => {
+      const probe = await api.probeModelConfig(values);
+
+      if (!probe.ok) {
+        throw new Error(probe.error?.message ?? "Model connection failed");
+      }
+
+      const saved = await api.updateModelConfig({
+        ...values,
+        supportsJsonMode: Boolean(probe.config.supportsJsonMode),
+        supportsUsage: Boolean(probe.config.supportsUsage),
+        supportsStream: Boolean(probe.config.supportsStream)
+      });
+
+      return { probe, saved };
+    },
+    onSuccess: async (result) => {
       reset({
         apiKey: "",
-        baseUrl: config.data?.baseUrl ?? "https://api.openai.com/v1",
-        model: config.data?.model ?? "gpt-4.1-mini"
+        baseUrl: result.saved.baseUrl,
+        model: result.saved.model
       });
       await queryClient.invalidateQueries({ queryKey: ["model-config"] });
     }
@@ -45,7 +60,10 @@ export function SettingsPage() {
       >
         <label className="grid gap-2 text-sm font-medium text-slate-700">
           Base URL
-          <input className="h-10 rounded-md border border-slate-300 px-3" {...register("baseUrl", { required: true })} />
+          <input
+            className="h-10 rounded-md border border-slate-300 px-3"
+            {...register("baseUrl", { required: true })}
+          />
         </label>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
           Model
@@ -58,13 +76,21 @@ export function SettingsPage() {
         <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
           Current key: {config.data?.hasApiKey ? `configured ending ${config.data.apiKeyTail}` : "not configured"}
         </div>
+        {update.data ? (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            Connection ok via {update.data.probe.provider}: JSON{" "}
+            {update.data.probe.config.supportsJsonMode ? "yes" : "no"}, usage{" "}
+            {update.data.probe.config.supportsUsage ? "yes" : "no"}, stream{" "}
+            {update.data.probe.config.supportsStream ? "yes" : "no"}.
+          </div>
+        ) : null}
         <button
           className="inline-flex h-10 w-fit items-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-60"
           type="submit"
           disabled={update.isPending}
         >
           <Save size={16} />
-          {update.isPending ? "Saving..." : "Save settings"}
+          {update.isPending ? "Testing..." : "Save settings"}
         </button>
         {update.error ? <p className="text-sm text-red-600">{update.error.message}</p> : null}
       </form>

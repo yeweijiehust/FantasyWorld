@@ -3,6 +3,8 @@ import type {
   CreateSaveInput,
   CreateTurnInput,
   ModelConfig,
+  ModelProbeInput,
+  ModelProbeResult,
   Save,
   SaveImport,
   SaveGenerationJob,
@@ -44,6 +46,8 @@ export const api = {
   modelConfig: () => request<ModelConfig>("/api/model-config"),
   updateModelConfig: (body: Partial<ModelConfig> & { apiKey?: string }) =>
     request<ModelConfig>("/api/model-config", { method: "PUT", body }),
+  probeModelConfig: (body: ModelProbeInput) =>
+    request<ModelProbeResult>("/api/model-config/probe", { method: "POST", body }),
   saves: () => request<SaveListItem[]>("/api/saves"),
   save: (id: string) => request<Save>(`/api/saves/${id}`),
   patchSave: (id: string, body: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>) =>

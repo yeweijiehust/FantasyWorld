@@ -19,9 +19,9 @@ import type {
   WorldMemory
 } from "@fantasy-world/shared";
 import * as dbSchema from "../db/schema.js";
-import { encryptSecret } from "../security/secrets.js";
+import { decryptSecret, encryptSecret } from "../security/secrets.js";
 import { buildSave, defaultModelConfig, id, now, renderTurnEvent } from "./prototype-store.js";
-import type { FantasyWorldStore } from "./types.js";
+import type { FantasyWorldStore, ModelCredentials } from "./types.js";
 
 type Database = NodePgDatabase<typeof dbSchema>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -81,6 +81,27 @@ export class DatabaseStore implements FantasyWorldStore {
     });
   }
 
+  async getModelCredentials(): Promise<ModelCredentials> {
+    const row = await this.db.query.modelConfigs.findFirst({
+      where: eq(dbSchema.modelConfigs.id, modelConfigId)
+    });
+
+    if (!row) {
+      return structuredClone(defaultModelConfig);
+    }
+
+    const config = await this.getModelConfig();
+    const credentials: ModelCredentials = {
+      ...config
+    };
+
+    if (row.apiKeyCiphertext) {
+      credentials.apiKey = decryptSecret(row.apiKeyCiphertext, this.encryptionKey);
+    }
+
+    return structuredClone(credentials);
+  }
+
   async updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): Promise<ModelConfig> {
     const existing = await this.db.query.modelConfigs.findFirst({
       where: eq(dbSchema.modelConfigs.id, modelConfigId)
@@ -92,9 +113,9 @@ export class DatabaseStore implements FantasyWorldStore {
       ...current,
       ...modelInput,
       hasApiKey: Boolean(cleanApiKey) || Boolean(existing?.apiKeyCiphertext) || current.hasApiKey,
-      supportsJsonMode: true,
-      supportsUsage: true,
-      supportsStream: false
+      supportsJsonMode: modelInput.supportsJsonMode ?? current.supportsJsonMode ?? true,
+      supportsUsage: modelInput.supportsUsage ?? current.supportsUsage ?? true,
+      supportsStream: modelInput.supportsStream ?? current.supportsStream ?? false
     };
     const apiKeyCiphertext = cleanApiKey ? encryptSecret(cleanApiKey, this.encryptionKey) : existing?.apiKeyCiphertext;
 
