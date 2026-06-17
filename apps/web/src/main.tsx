@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import "./i18n.js";
 import "./styles.css";
 import { AppShell } from "./shell/AppShell.js";
+import { NavLinks } from "./shell/NavLinks.js";
 import { SettingsPage } from "./views/SettingsPage.js";
 import { WorldPage } from "./views/WorldPage.js";
 
@@ -11,18 +13,7 @@ const queryClient = new QueryClient();
 
 const rootRoute = createRootRoute({
   component: () => (
-    <AppShell
-      nav={
-        <>
-          <Link to="/" className="[&.active]:text-slate-950">
-            World
-          </Link>
-          <Link to="/settings" className="[&.active]:text-slate-950">
-            Settings
-          </Link>
-        </>
-      }
-    >
+    <AppShell nav={<NavLinks />}>
       <Outlet />
     </AppShell>
   )

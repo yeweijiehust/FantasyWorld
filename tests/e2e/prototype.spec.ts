@@ -49,3 +49,29 @@ test("creates a world and advances one turn", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "Advance turn" }).click();
   await expect(page.getByText("GM 指令改变了局势")).toBeVisible();
 });
+
+test("creates an English save with Chinese UI", async ({ page }, testInfo) => {
+  const worldName = `Mist Harbor ${testInfo.project.name}`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Enter" }).click();
+  await page.getByLabel("UI language").selectOption("zh");
+  await expect(page.getByRole("heading", { name: "存档" })).toBeVisible();
+  await page.getByLabel("存档语言").selectOption("en");
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole("textbox", { name: "世界名称" }).fill(worldName);
+  await page.getByRole("textbox", { name: "世界前提" }).fill("A port city is choosing who writes its next law.");
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole("textbox", { name: "角色种子" }).fill("Ada\nBryn\nCora");
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole("button", { name: "生成草稿" }).click();
+  await expect(page.getByText("草稿已就绪")).toBeVisible();
+  await page.getByRole("button", { name: "接受草稿" }).click();
+  await expect(page.getByRole("heading", { name: worldName })).toBeVisible();
+  await page.getByRole("textbox", { name: "GM 介入" }).fill("Let the harbor council split into two factions");
+  await page.getByRole("button", { name: "推进回合" }).click();
+  await expect(page.getByRole("button", { name: "接受回合" })).toBeVisible();
+  await page.getByRole("button", { name: "接受回合" }).click();
+  await expect(page.getByRole("button", { name: "回合已接受" })).toBeVisible();
+});

@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { KeyRound } from "lucide-react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client.js";
 
 type LoginForm = {
@@ -8,6 +9,7 @@ type LoginForm = {
 };
 
 export function LoginPanel() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { register, handleSubmit } = useForm<LoginForm>({ defaultValues: { password: "fantasyworld" } });
   const login = useMutation({
@@ -29,13 +31,14 @@ export function LoginPanel() {
           </div>
           <div>
             <h1 className="text-xl font-semibold text-slate-950">FantasyWorld</h1>
-            <p className="text-sm text-slate-500">Single-player GM console</p>
+            <p className="text-sm text-slate-500">{t("login.subtitle")}</p>
           </div>
         </div>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
-          Admin password
+          {t("login.password")}
           <input
             className="h-10 rounded-md border border-slate-300 px-3 text-slate-950 outline-none focus:border-slate-950"
+            aria-label={t("login.password")}
             type="password"
             {...register("password", { required: true })}
           />
@@ -46,7 +49,7 @@ export function LoginPanel() {
           type="submit"
           disabled={login.isPending}
         >
-          {login.isPending ? "Signing in..." : "Enter"}
+          {login.isPending ? t("login.signingIn") : t("login.enter")}
         </button>
       </form>
     </main>

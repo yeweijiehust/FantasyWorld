@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client.js";
 
 type SettingsForm = {
@@ -10,6 +11,7 @@ type SettingsForm = {
 };
 
 export function SettingsPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["model-config"], queryFn: api.modelConfig });
   const { register, handleSubmit, reset } = useForm<SettingsForm>({
@@ -24,7 +26,7 @@ export function SettingsPage() {
       const probe = await api.probeModelConfig(values);
 
       if (!probe.ok) {
-        throw new Error(probe.error?.message ?? "Model connection failed");
+        throw new Error(probe.error?.message ?? t("settings.connectionFailed"));
       }
 
       const saved = await api.updateModelConfig({
@@ -49,39 +51,42 @@ export function SettingsPage() {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5">
       <div className="mb-5">
-        <h1 className="text-2xl font-semibold text-slate-950">Model settings</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Prototype calls use a mock provider, but the configuration surface is wired for OpenAI-compatible models.
-        </p>
+        <h1 className="text-2xl font-semibold text-slate-950">{t("settings.title")}</h1>
+        <p className="mt-1 text-sm text-slate-500">{t("settings.body")}</p>
       </div>
       <form
         className="grid max-w-2xl gap-4"
         onSubmit={(event) => void handleSubmit((values) => update.mutate(values))(event)}
       >
         <label className="grid gap-2 text-sm font-medium text-slate-700">
-          Base URL
+          {t("settings.baseUrl")}
           <input
             className="h-10 rounded-md border border-slate-300 px-3"
             {...register("baseUrl", { required: true })}
           />
         </label>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
-          Model
+          {t("settings.model")}
           <input className="h-10 rounded-md border border-slate-300 px-3" {...register("model", { required: true })} />
         </label>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
-          API key
+          {t("settings.apiKey")}
           <input className="h-10 rounded-md border border-slate-300 px-3" type="password" {...register("apiKey")} />
         </label>
         <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
-          Current key: {config.data?.hasApiKey ? `configured ending ${config.data.apiKeyTail}` : "not configured"}
+          {t("settings.currentKey")}:{" "}
+          {config.data?.hasApiKey
+            ? t("settings.configuredEnding", { tail: config.data.apiKeyTail })
+            : t("settings.notConfigured")}
         </div>
         {update.data ? (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-            Connection ok via {update.data.probe.provider}: JSON{" "}
-            {update.data.probe.config.supportsJsonMode ? "yes" : "no"}, usage{" "}
-            {update.data.probe.config.supportsUsage ? "yes" : "no"}, stream{" "}
-            {update.data.probe.config.supportsStream ? "yes" : "no"}.
+            {t("settings.connectionOk", {
+              provider: update.data.probe.provider,
+              json: update.data.probe.config.supportsJsonMode ? t("settings.yes") : t("settings.no"),
+              usage: update.data.probe.config.supportsUsage ? t("settings.yes") : t("settings.no"),
+              stream: update.data.probe.config.supportsStream ? t("settings.yes") : t("settings.no")
+            })}
           </div>
         ) : null}
         <button
@@ -90,7 +95,7 @@ export function SettingsPage() {
           disabled={update.isPending}
         >
           <Save size={16} />
-          {update.isPending ? "Testing..." : "Save settings"}
+          {update.isPending ? t("settings.testing") : t("settings.save")}
         </button>
         {update.error ? <p className="text-sm text-red-600">{update.error.message}</p> : null}
       </form>
