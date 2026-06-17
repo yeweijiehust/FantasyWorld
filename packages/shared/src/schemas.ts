@@ -175,11 +175,19 @@ export const SaveListItemSchema = Type.Object({
 export type SaveListItem = Static<typeof SaveListItemSchema>;
 
 export const CreateSaveInputSchema = Type.Object({
-  templateId: Type.String(),
+  templateId: Type.String({ minLength: 1 }),
   name: Type.String({ minLength: 1 }),
-  premise: Type.String(),
-  characterSeeds: Type.Array(Type.String()),
-  settings: SaveSettingsSchema
+  premise: Type.String({ minLength: 1 }),
+  characterSeeds: Type.Array(Type.String({ minLength: 1 }), { minItems: 3, maxItems: 8 }),
+  settings: SaveSettingsSchema,
+  modelOverride: Type.Optional(
+    Type.Partial(
+      Type.Object({
+        baseUrl: Type.String({ minLength: 1 }),
+        model: Type.String({ minLength: 1 })
+      })
+    )
+  )
 });
 export type CreateSaveInput = Static<typeof CreateSaveInputSchema>;
 

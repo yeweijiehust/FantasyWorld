@@ -13,6 +13,7 @@ import type {
   Turn,
   TurnJob
 } from "@fantasy-world/shared";
+import { getWorldTemplate } from "@fantasy-world/shared";
 import type { FantasyWorldStore, ModelCredentials } from "./types.js";
 
 export const now = () => new Date().toISOString();
@@ -360,54 +361,53 @@ export const prototypeStore = new PrototypeStore();
 
 export function buildSave(input: CreateSaveInput): Save {
   const createdAt = now();
+  const template = getWorldTemplate(input.templateId);
+  const language = input.settings.language;
+  const premise = input.premise.trim() || template.premise[language];
   const location: Location = {
     id: id("location"),
-    name: input.settings.language === "zh" ? "边境港口" : "Frontier Harbor",
-    description:
-      input.settings.language === "zh"
-        ? "一座夹在贸易、谣言和旧王国阴影之间的港口。"
-        : "A harbor caught between trade, rumor, and the shadow of an old kingdom.",
-    status: input.settings.language === "zh" ? "平静但暗流涌动" : "Calm with quiet pressure underneath"
+    name: template.location.name[language],
+    description: template.location.description[language],
+    status: template.location.status[language]
   };
-  const seeds = input.characterSeeds.length > 0 ? input.characterSeeds : ["守望者", "流亡继承人", "走私船长"];
-  const characters = seeds.slice(0, 8).map<Character>((seed, index) => ({
+  const fallbackSeeds = template.characterSeeds[language];
+  const trimmedSeeds = input.characterSeeds.map((seed) => seed.trim()).filter(Boolean);
+  const seeds = (trimmedSeeds.length >= 3 ? trimmedSeeds : [...trimmedSeeds, ...fallbackSeeds]).slice(0, 8);
+  const characters = seeds.map<Character>((seed, index) => ({
     id: id("character"),
-    name: seed || `Character ${index + 1}`,
+    name: seed || (language === "zh" ? `角色 ${index + 1}` : `Character ${index + 1}`),
     profile:
-      input.settings.language === "zh"
-        ? `${seed} 被卷入了 ${input.name} 的核心冲突。`
-        : `${seed} has been pulled into the central conflict of ${input.name}.`,
-    personality: input.settings.language === "zh" ? "谨慎、执着、会隐藏真实动机" : "Careful, driven, and private",
-    longTermGoal: input.settings.language === "zh" ? "保护自己珍视的东西" : "Protect what matters most",
-    shortTermGoal: input.settings.language === "zh" ? "弄清当前局势的真正威胁" : "Understand the immediate threat",
+      language === "zh"
+        ? `${seed} 被卷入了《${input.name}》的核心冲突：${premise}`
+        : `${seed} has been pulled into the central conflict of ${input.name}: ${premise}`,
+    personality: language === "zh" ? "谨慎、执着、会隐藏真实动机" : "Careful, driven, and private",
+    longTermGoal: language === "zh" ? "保护自己珍视的东西" : "Protect what matters most",
+    shortTermGoal: language === "zh" ? "弄清当前局势的真正威胁" : "Understand the immediate threat",
     locationId: location.id,
-    status: input.settings.language === "zh" ? "可行动" : "Available",
-    secrets: [input.settings.language === "zh" ? "掌握一条尚未公开的线索" : "Knows one unrevealed lead"],
-    privateMemory: [input.settings.language === "zh" ? "记得世界刚刚开始运转" : "Remembers the world beginning to move"]
+    status: language === "zh" ? "可行动" : "Available",
+    secrets: [language === "zh" ? "掌握一条尚未公开的线索" : "Knows one unrevealed lead"],
+    privateMemory: [language === "zh" ? "记得世界刚刚开始运转" : "Remembers the world beginning to move"]
   }));
   const relationships = characters.slice(1).map<Relationship>((character, index) => ({
     id: id("relationship"),
     sourceCharacterId: characters[0]?.id ?? character.id,
     targetCharacterId: character.id,
-    label: index % 2 === 0 ? "信任" : "试探",
+    label: language === "zh" ? (index % 2 === 0 ? "信任" : "试探") : index % 2 === 0 ? "Trust" : "Testing",
     strength: index % 2 === 0 ? 35 : 10,
-    summary:
-      input.settings.language === "zh"
-        ? "彼此有合作空间，但仍保留秘密。"
-        : "They can cooperate, but both still keep secrets."
+    summary: language === "zh" ? "彼此有合作空间，但仍保留秘密。" : "They can cooperate, but both still keep secrets."
   }));
 
   return {
     id: id("save"),
     name: input.name,
-    description: input.premise,
+    description: premise,
     schemaVersion: "1",
     turnNumber: 0,
     saveSeed: id("seed"),
     settings: input.settings,
     worldMemory: {
       timeline: [],
-      worldSummary: input.premise,
+      worldSummary: premise,
       locationSummaries: {
         [location.id]: location.description
       }

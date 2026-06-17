@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Compile } from "typebox/compile";
-import { SaveSchema } from "./schemas.js";
+import { CreateSaveInputSchema, SaveSchema } from "./schemas.js";
+import { WORLD_TEMPLATES, createTemplateSaveInput } from "./templates.js";
 
 describe("SaveSchema", () => {
   it("accepts a minimal generated save", () => {
@@ -33,5 +34,20 @@ describe("SaveSchema", () => {
     });
 
     expect(valid).toBe(true);
+  });
+});
+
+describe("world templates", () => {
+  it("provide template save input with 3 to 8 character seeds", () => {
+    expect(WORLD_TEMPLATES.length).toBeGreaterThanOrEqual(3);
+    expect(WORLD_TEMPLATES.length).toBeLessThanOrEqual(5);
+
+    const check = Compile(CreateSaveInputSchema);
+    const input = createTemplateSaveInput("arcane-academy", "en");
+
+    expect(input.name).toBe("Star Lantern Archive");
+    expect(input.characterSeeds.length).toBeGreaterThanOrEqual(3);
+    expect(input.characterSeeds.length).toBeLessThanOrEqual(8);
+    expect(check.Check(input)).toBe(true);
   });
 });

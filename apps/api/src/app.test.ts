@@ -6,7 +6,7 @@ import { createDatabaseStore } from "./db/client.js";
 import { LlmService } from "./llm/service.js";
 import type { LlmProvider } from "./llm/types.js";
 import { PrototypeStore } from "./store/prototype-store.js";
-import type { ModelConfig, ModelProbeResult, Save } from "@fantasy-world/shared";
+import type { ModelConfig, ModelProbeResult, Save, SaveGenerationJob, SaveListItem } from "@fantasy-world/shared";
 
 const { Pool } = pg;
 
@@ -266,6 +266,116 @@ describe("FantasyWorld API auth and model config safety", () => {
 });
 
 describe("FantasyWorld API prototype", () => {
+  it("generates localized template drafts without listing them before acceptance", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+    const worldName = "Archive Finals";
+
+    const generation = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload: {
+        templateId: "arcane-academy",
+        name: worldName,
+        premise: "The archive wakes up during finals night.",
+        characterSeeds: ["Lan", "Vio", "Frey"],
+        settings: {
+          language: "en",
+          turnTimeScale: "One class period",
+          randomness: 35,
+          contentBoundary: "PG",
+          styleGuide: "Keep wonder high while making rules consistent"
+        },
+        modelOverride: {
+          model: "mock-draft-model"
+        }
+      }
+    });
+
+    expect(generation.statusCode).toBe(201);
+
+    const job = generation.json<SaveGenerationJob>();
+    expect(job.draft?.save.locations[0]?.name).toBe("Star Lantern Archive");
+    expect(job.draft?.save.characters.map((character) => character.name)).toEqual(["Lan", "Vio", "Frey"]);
+
+    const listBeforeAccept = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(listBeforeAccept.json<SaveListItem[]>()).toEqual([]);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/api/save-generation-jobs/${job.id}/accept`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json<Save>().locations[0]?.name).toBe("Star Lantern Archive");
+
+    const listAfterAccept = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(listAfterAccept.json<SaveListItem[]>()).toMatchObject([
+      {
+        name: worldName,
+        characterCount: 3,
+        language: "en"
+      }
+    ]);
+
+    await app.close();
+  });
+
+  it("rejects save drafts outside the 3 to 8 character range", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+
+    for (const characterSeeds of [
+      ["A", "B"],
+      ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+    ]) {
+      const generation = await app.inject({
+        method: "POST",
+        url: "/api/save-generation-jobs",
+        headers: {
+          cookie
+        },
+        payload: {
+          templateId: "fantasy-frontier",
+          name: "Invalid cast",
+          premise: "Too many or too few people.",
+          characterSeeds,
+          settings: {
+            language: "en",
+            turnTimeScale: "One scene",
+            randomness: 25,
+            contentBoundary: "PG-13",
+            styleGuide: "Test"
+          }
+        }
+      });
+
+      expect(generation.statusCode).toBe(400);
+    }
+
+    await app.close();
+  });
+
   it("creates a save draft, accepts it, and advances one turn", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
     const cookie = await login(app);
