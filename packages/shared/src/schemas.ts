@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 
 export const IdSchema = Type.String({ minLength: 1 });
 export const NonEmptyStringSchema = Type.String({ minLength: 1 });
+export const CURRENT_SAVE_SCHEMA_VERSION = "1";
 
 export const LanguageSchema = Type.Union([Type.Literal("zh"), Type.Literal("en")]);
 export type Language = Static<typeof LanguageSchema>;
@@ -250,7 +251,7 @@ export const SaveSchema = Type.Object({
   id: IdSchema,
   name: Type.String(),
   description: Type.String(),
-  schemaVersion: Type.String(),
+  schemaVersion: Type.Literal(CURRENT_SAVE_SCHEMA_VERSION),
   turnNumber: Type.Number({ minimum: 0 }),
   saveSeed: Type.String(),
   settings: SaveSettingsSchema,
@@ -263,7 +264,22 @@ export const SaveSchema = Type.Object({
   updatedAt: Type.String()
 });
 export type Save = Static<typeof SaveSchema>;
-export const SaveImportSchema = SaveSchema;
+export const SaveExportSchema = Type.Object({
+  schemaVersion: Type.Literal(CURRENT_SAVE_SCHEMA_VERSION),
+  exportedAt: Type.String(),
+  save: SaveSchema
+});
+export type SaveExport = Static<typeof SaveExportSchema>;
+export const SaveImportEnvelopeSchema = Type.Object({
+  schemaVersion: Type.String({ minLength: 1 }),
+  exportedAt: Type.Optional(Type.String()),
+  save: Type.Unknown()
+});
+export const SaveImportSchema = Type.Union([
+  SaveSchema,
+  SaveImportEnvelopeSchema,
+  Type.Object({ schemaVersion: Type.String({ minLength: 1 }) }, { additionalProperties: true })
+]);
 export type SaveImport = Static<typeof SaveImportSchema>;
 
 export const SaveListItemSchema = Type.Object({

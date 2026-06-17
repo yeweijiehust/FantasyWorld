@@ -11,7 +11,6 @@ import type {
   RelationshipPatch,
   Save,
   SaveGenerationJob,
-  SaveImport,
   SaveListItem,
   TurnJob
 } from "@fantasy-world/shared";
@@ -34,7 +33,7 @@ export type FantasyWorldStore = {
   cancelGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   retryGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   acceptGenerationJob(jobId: string): Save | undefined | Promise<Save | undefined>;
-  importSave(input: SaveImport): Save | Promise<Save>;
+  importSave(input: Save): Save | Promise<Save>;
   patchSave(
     saveId: string,
     patch: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>

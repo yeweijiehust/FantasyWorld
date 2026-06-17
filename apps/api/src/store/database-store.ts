@@ -1,27 +1,27 @@
 import { and, asc, desc, eq, gt } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type {
-  Character,
-  CharacterPatch,
-  CreateCharacterInput,
-  CreateLocationInput,
-  CreateRelationshipInput,
-  CreateSaveInput,
-  CreateTurnInput,
-  Location,
-  LocationPatch,
-  ModelConfig,
-  PatchTurnDraftInput,
-  Relationship,
-  RelationshipPatch,
-  Save,
-  SaveGenerationJob,
-  SaveImport,
-  SaveListItem,
-  StateChange,
-  Turn,
-  TurnJob,
-  WorldMemory
+import {
+  CURRENT_SAVE_SCHEMA_VERSION,
+  type Character,
+  type CharacterPatch,
+  type CreateCharacterInput,
+  type CreateLocationInput,
+  type CreateRelationshipInput,
+  type CreateSaveInput,
+  type CreateTurnInput,
+  type Location,
+  type LocationPatch,
+  type ModelConfig,
+  type PatchTurnDraftInput,
+  type Relationship,
+  type RelationshipPatch,
+  type Save,
+  type SaveGenerationJob,
+  type SaveListItem,
+  type StateChange,
+  type Turn,
+  type TurnJob,
+  type WorldMemory
 } from "@fantasy-world/shared";
 import * as dbSchema from "../db/schema.js";
 import { decryptSecret, encryptSecret } from "../security/secrets.js";
@@ -309,7 +309,7 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(accepted.id);
   }
 
-  async importSave(input: SaveImport): Promise<Save> {
+  async importSave(input: Save): Promise<Save> {
     const save = remapImportedSave(input);
 
     await this.insertSave(this.db, save);
@@ -348,6 +348,10 @@ export class DatabaseStore implements FantasyWorldStore {
     const save = await this.readSave(saveId);
 
     if (!save) {
+      return undefined;
+    }
+
+    if (save.schemaVersion !== CURRENT_SAVE_SCHEMA_VERSION) {
       return undefined;
     }
 
@@ -840,7 +844,7 @@ export class DatabaseStore implements FantasyWorldStore {
       id: save.id,
       name: save.name,
       description: save.description,
-      schemaVersion: save.schemaVersion,
+      schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
       turnNumber: save.turnNumber,
       saveSeed: save.saveSeed,
       settings: structuredClone(save.settings as Save["settings"]),
@@ -944,7 +948,7 @@ export class DatabaseStore implements FantasyWorldStore {
   }
 }
 
-function remapImportedSave(input: SaveImport): Save {
+function remapImportedSave(input: Save): Save {
   const saveId = id("save");
   const locationIds = new Map(input.locations.map((location) => [location.id, id("location")]));
   const characterIds = new Map(input.characters.map((character) => [character.id, id("character")]));

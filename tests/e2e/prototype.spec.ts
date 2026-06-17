@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
 test("creates a world and advances one turn", async ({ page }, testInfo) => {
@@ -31,4 +32,20 @@ test("creates a world and advances one turn", async ({ page }, testInfo) => {
   await expect(page.getByRole("button", { name: "Turn accepted" })).toBeVisible();
   await page.getByRole("button", { name: "Rollback" }).click();
   await expect(page.getByText("The world is waiting for its first turn.")).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export" }).click();
+  const download = await downloadPromise;
+  const exportPath = testInfo.outputPath(`export-${testInfo.project.name}.json`);
+  await download.saveAs(exportPath);
+  const exported = JSON.parse(readFileSync(exportPath, "utf8")) as { schemaVersion: string; save: { name: string } };
+
+  expect(exported.schemaVersion).toBe("1");
+  expect(exported.save.name).toBe(worldName);
+
+  await page.getByLabel("Import save JSON").setInputFiles(exportPath);
+  await expect(page.getByText("Imported")).toBeVisible();
+  await expect(page.getByRole("heading", { name: worldName })).toBeVisible();
+  await page.getByRole("textbox", { name: "GM intervention" }).fill("让导入后的世界出现第二条线索");
+  await page.getByRole("button", { name: "Advance turn" }).click();
+  await expect(page.getByText("GM 指令改变了局势")).toBeVisible();
 });
