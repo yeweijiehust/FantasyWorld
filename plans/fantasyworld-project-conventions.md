@@ -9,7 +9,8 @@
 ## Core Workflow
 
 - Git 工作流：
-  - 远程仓库使用 GitHub 公开仓库，本地 `origin` 指向该仓库。
+  - 远程仓库使用 GitHub 公开仓库：`https://github.com/yeweijiehust/FantasyWorld.git`。
+  - 本地 `origin` 指向该仓库，`main` 跟踪 `origin/main`。
   - 所有开发在分支上完成，AI/代理分支默认使用 `codex/<topic>`。
   - `main` 启用 GitHub branch protection，只接受通过 PR 的变更。
   - 禁止直接 push 到 `main`。
@@ -53,6 +54,13 @@
   - 导出存档默认不包含解密后的模型 API key。
   - 首版不支持 `ENCRYPTION_KEY` 自动轮换；启动或配置读取时必须检测解密失败并给出明确错误。
   - 部署文档必须强调备份 `ENCRYPTION_KEY`，否则已加密的 API key 可能无法恢复。
+- 仓库基础文件：
+  - 实现前必须先建立 `.gitignore` 和 `.gitattributes`。
+  - `.gitignore` 必须忽略 Node 依赖、真实环境变量、构建产物、缓存、测试报告、临时目录和本地 IDE/OS 文件。
+  - `.gitignore` 不得误忽略 `.env.example`、`pnpm-lock.yaml`、`.github/workflows/*.yml`、`render.yaml`、Docker
+    Compose、Drizzle schema 或 migrations。
+  - `.gitattributes` 默认固定文本文件为 LF，Windows 脚本可显式使用 CRLF。
+  - 公开仓库暂不添加 LICENSE，默认保留权利；未来决定开源授权时再单独讨论。
 - 依赖：
   - 新依赖必须有明确用途，优先官方、活跃、维护良好的包。
   - 必须提交 lockfile。
@@ -95,6 +103,7 @@
   - 必须说明计划修改范围。
   - 不得覆盖未理解的用户改动。
   - 不得执行 destructive git 命令，除非用户明确要求。
+  - 不得登录 Render、触发生产部署、代填生产环境变量或保存生产密钥；Step 13 只负责提醒用户手动部署和核对清单。
 - 文档：
   - `plans/` 是项目决策来源。
   - 产品、技术栈、API、数据库、LLM 推演、测试门禁、部署或工作流发生变化时必须同步文档。
@@ -104,6 +113,7 @@
 
 ## Assumptions
 
-- 具体脚本名后续实现时固定为根目录统一命令，例如 `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`、`pnpm test:e2e`。
+- 具体脚本名后续实现时固定为根目录统一命令，例如
+  `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`、`pnpm test:e2e`。
 - 项目初期仍是单人/单实例 MVP，但工作流按可持续协作标准设计。
 - 首版不做应用内自动云备份，依赖存档 JSON 导入/导出和部署层数据库备份。
