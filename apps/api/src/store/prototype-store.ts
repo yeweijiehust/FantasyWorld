@@ -15,6 +15,7 @@ import type {
   TurnJob
 } from "@fantasy-world/shared";
 import { getWorldTemplate } from "@fantasy-world/shared";
+import { clampRelationshipStrength, createTurnOrchestration } from "../turn/orchestrator.js";
 import type { FantasyWorldStore, ModelCredentials } from "./types.js";
 
 export const now = () => new Date().toISOString();
@@ -517,25 +518,23 @@ export function buildTurnDraft(
   idempotencyKey = input.idempotencyKey
 ) {
   const turnNumber = save.turnNumber + 1;
-  const location = save.locations[0];
-  const involved = save.characters.slice(0, Math.min(2, save.characters.length));
-  const instruction = input.gmInstruction?.trim();
-  const eventTitle = instruction ? "GM 指令改变了局势" : "世界自行推进";
-  const eventBody = renderTurnEvent(save, involved, location, instruction);
+  const orchestration = createTurnOrchestration(save, input);
   const event =
-    location?.id !== undefined
+    orchestration.focus.locationId !== undefined
       ? {
           id: id("event"),
-          title: eventTitle,
-          body: eventBody,
-          involvedCharacterIds: involved.map((character) => character.id),
-          locationId: location.id
+          title: orchestration.event.title,
+          body: orchestration.event.body,
+          involvedCharacterIds: orchestration.focus.characterIds,
+          locationId: orchestration.focus.locationId,
+          dialogue: orchestration.event.dialogue
         }
       : {
           id: id("event"),
-          title: eventTitle,
-          body: eventBody,
-          involvedCharacterIds: involved.map((character) => character.id)
+          title: orchestration.event.title,
+          body: orchestration.event.body,
+          involvedCharacterIds: orchestration.focus.characterIds,
+          dialogue: orchestration.event.dialogue
         };
   const turn: Turn = {
     id: id("turn"),
@@ -543,31 +542,54 @@ export function buildTurnDraft(
     turnNumber,
     status: "needs_review",
     events: [event],
-    stateChanges: [
-      {
-        id: id("change"),
-        targetType: "worldMemory",
-        field: "timeline",
-        before: `${save.worldMemory.timeline.length} entries`,
-        after: `${save.worldMemory.timeline.length + 1} entries`
-      }
-    ],
+    stateChanges: orchestration.stateChanges.map((change) => ({ ...change, id: id("change") })),
     callSummary: {
       model,
-      calls: 1,
-      durationMs: 320,
-      estimatedTokens: 900
+      calls: 1 + orchestration.characterPlans.length,
+      durationMs: 320 + orchestration.characterPlans.length * 90,
+      estimatedTokens: 900 + orchestration.characterPlans.length * 180
     },
     createdAt: now()
   };
+  const updatedCharacters = save.characters.map((character) => {
+    const memoryUpdate = orchestration.memoryUpdates.find((update) => update.characterId === character.id);
+
+    if (!memoryUpdate) {
+      return character;
+    }
+
+    return {
+      ...character,
+      status:
+        save.settings.language === "zh"
+          ? `卷入：${orchestration.focus.conflict}`
+          : `Engaged: ${orchestration.focus.conflict}`,
+      privateMemory: [...character.privateMemory, memoryUpdate.entry]
+    };
+  });
+  const updatedRelationships = save.relationships.map((relationship) => {
+    const update = orchestration.relationshipUpdates.find((item) => item.relationshipId === relationship.id);
+
+    if (!update) {
+      return relationship;
+    }
+
+    return {
+      ...relationship,
+      strength: clampRelationshipStrength(relationship.strength + update.strengthDelta),
+      summary: update.summary
+    };
+  });
   const updatedSave: Save = {
     ...save,
     turnNumber,
+    characters: updatedCharacters,
+    relationships: updatedRelationships,
     turns: [...save.turns, turn],
     worldMemory: {
       ...save.worldMemory,
-      timeline: [...save.worldMemory.timeline, `${turnNumber}. ${eventTitle}: ${eventBody}`],
-      worldSummary: `${save.worldMemory.worldSummary}\n第 ${turnNumber} 回合：${eventBody}`
+      timeline: [...save.worldMemory.timeline, orchestration.worldMemory.timelineEntry],
+      worldSummary: `${save.worldMemory.worldSummary}\n${orchestration.worldMemory.summaryDelta}`
     },
     updatedAt: now()
   };
@@ -582,24 +604,4 @@ export function buildTurnDraft(
   };
 
   return { job, updatedSave };
-}
-
-export function renderTurnEvent(
-  save: Save,
-  characters: Character[],
-  location: Location | undefined,
-  instruction: string | undefined
-) {
-  const names = characters.map((character) => character.name).join("、");
-  const place = location?.name ?? save.name;
-
-  if (save.settings.language === "en") {
-    const base = `${names || "The active cast"} notices a shift around ${place}.`;
-    return instruction
-      ? `${base} The GM directive takes hold: ${instruction}.`
-      : `${base} Each character updates their next move.`;
-  }
-
-  const base = `${names || "活跃角色"}注意到${place}的局势发生了变化。`;
-  return instruction ? `${base} GM 指令生效：${instruction}。` : `${base} 他们各自调整了下一步行动。`;
 }
