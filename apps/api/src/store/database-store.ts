@@ -384,7 +384,7 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     await this.db.transaction(async (tx) => {
-      await this.updateSaveCore(tx, updatedSave);
+      await this.replaceSaveState(tx, updatedSave);
       await tx.insert(dbSchema.turns).values({
         id: turn.id,
         saveId,
@@ -491,7 +491,7 @@ export class DatabaseStore implements FantasyWorldStore {
         await tx.delete(dbSchema.turns).where(eq(dbSchema.turns.id, job.turn.id));
       }
 
-      await this.updateSaveCore(tx, updatedSave);
+      await this.replaceSaveState(tx, updatedSave);
       await tx.insert(dbSchema.turns).values({
         id: turn.id,
         saveId: job.saveId,
@@ -779,12 +779,17 @@ function remapImportedSave(input: SaveImport): Save {
     saveId,
     events: turn.events.map((event) => {
       const locationId = event.locationId ? (locationIds.get(event.locationId) ?? event.locationId) : undefined;
+      const dialogue = event.dialogue?.map((line) => ({
+        ...line,
+        characterId: characterIds.get(line.characterId) ?? line.characterId
+      }));
       const base = {
         ...event,
         id: id("event"),
         involvedCharacterIds: event.involvedCharacterIds.map(
           (characterId) => characterIds.get(characterId) ?? characterId
-        )
+        ),
+        ...(dialogue ? { dialogue } : {})
       };
 
       return locationId ? { ...base, locationId } : base;

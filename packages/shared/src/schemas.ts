@@ -122,9 +122,83 @@ export const TurnEventSchema = Type.Object({
   title: Type.String(),
   body: Type.String(),
   involvedCharacterIds: Type.Array(IdSchema),
-  locationId: Type.Optional(IdSchema)
+  locationId: Type.Optional(IdSchema),
+  dialogue: Type.Optional(
+    Type.Array(
+      Type.Object({
+        characterId: IdSchema,
+        line: Type.String({ minLength: 1 })
+      })
+    )
+  )
 });
 export type TurnEvent = Static<typeof TurnEventSchema>;
+
+export const TurnOrchestrationStateChangeSchema = Type.Object({
+  targetType: Type.Union([
+    Type.Literal("save"),
+    Type.Literal("character"),
+    Type.Literal("location"),
+    Type.Literal("relationship"),
+    Type.Literal("worldMemory")
+  ]),
+  targetId: Type.Optional(IdSchema),
+  field: Type.String({ minLength: 1 }),
+  before: Type.String(),
+  after: Type.String()
+});
+export type TurnOrchestrationStateChange = Static<typeof TurnOrchestrationStateChangeSchema>;
+
+export const TurnOrchestrationOutputSchema = Type.Object({
+  focus: Type.Object({
+    characterIds: Type.Array(IdSchema, { minItems: 1 }),
+    locationId: Type.Optional(IdSchema),
+    conflict: Type.String({ minLength: 1 }),
+    gmInstruction: Type.Optional(Type.String({ minLength: 1 }))
+  }),
+  characterPlans: Type.Array(
+    Type.Object({
+      characterId: IdSchema,
+      intention: Type.String({ minLength: 1 }),
+      action: Type.String({ minLength: 1 }),
+      referencedGoal: Type.String({ minLength: 1 }),
+      referencedMemory: Type.Optional(Type.String({ minLength: 1 })),
+      referencedSecret: Type.Optional(Type.String({ minLength: 1 })),
+      relationshipContext: Type.Optional(Type.String({ minLength: 1 })),
+      dialogue: Type.Optional(Type.String({ minLength: 1 }))
+    }),
+    { minItems: 1 }
+  ),
+  event: Type.Object({
+    title: Type.String({ minLength: 1 }),
+    body: Type.String({ minLength: 1 }),
+    dialogue: Type.Array(
+      Type.Object({
+        characterId: IdSchema,
+        line: Type.String({ minLength: 1 })
+      })
+    )
+  }),
+  stateChanges: Type.Array(TurnOrchestrationStateChangeSchema, { minItems: 1 }),
+  memoryUpdates: Type.Array(
+    Type.Object({
+      characterId: IdSchema,
+      entry: Type.String({ minLength: 1 })
+    })
+  ),
+  relationshipUpdates: Type.Array(
+    Type.Object({
+      relationshipId: IdSchema,
+      strengthDelta: Type.Number({ minimum: -20, maximum: 20 }),
+      summary: Type.String({ minLength: 1 })
+    })
+  ),
+  worldMemory: Type.Object({
+    timelineEntry: Type.String({ minLength: 1 }),
+    summaryDelta: Type.String({ minLength: 1 })
+  })
+});
+export type TurnOrchestrationOutput = Static<typeof TurnOrchestrationOutputSchema>;
 
 export const TurnSchema = Type.Object({
   id: IdSchema,

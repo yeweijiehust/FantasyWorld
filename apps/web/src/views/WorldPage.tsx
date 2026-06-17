@@ -746,6 +746,18 @@ function Timeline({ save }: { save: Save }) {
                   <div key={event.id}>
                     <h2 className="text-lg font-semibold text-slate-950">{event.title}</h2>
                     <p className="mt-1 text-sm leading-6 text-slate-700">{event.body}</p>
+                    {event.dialogue?.length ? (
+                      <div className="mt-3 grid gap-2">
+                        {event.dialogue.map((line) => (
+                          <blockquote
+                            key={`${event.id}:${line.characterId}:${line.line}`}
+                            className="border-l-2 border-slate-300 pl-3 text-sm text-slate-600"
+                          >
+                            {line.line}
+                          </blockquote>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </article>

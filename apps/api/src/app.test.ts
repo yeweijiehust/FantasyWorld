@@ -653,6 +653,88 @@ describe("FantasyWorld API prototype", () => {
 
     await app.close();
   });
+
+  it("orchestrates turn focus, character intent, memory, and relationship changes", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+    const save = await createAcceptedSave(app, cookie, "编排测试");
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "让密探逼近码头",
+        idempotencyKey: "orchestration-first"
+      }
+    });
+
+    expect(first.statusCode).toBe(201);
+    const firstJob = first.json<TurnJob>();
+    const firstTurn = firstJob.turn;
+
+    expect(firstTurn?.events).toHaveLength(1);
+    expect(firstTurn?.events[0]?.body).toContain("让密探逼近码头");
+    expect(firstTurn?.events[0]?.body).toContain("角色目标");
+    expect(firstTurn?.events[0]?.body).toContain("私有记忆");
+    expect(firstTurn?.events[0]?.body).toContain("秘密");
+    expect(firstTurn?.events[0]?.dialogue?.length).toBeGreaterThan(0);
+    expect(firstTurn?.stateChanges.some((change) => change.targetType === "worldMemory")).toBe(true);
+    expect(
+      firstTurn?.stateChanges.some((change) => change.targetType === "character" && change.field === "privateMemory")
+    ).toBe(true);
+    expect(
+      firstTurn?.stateChanges.some((change) => change.targetType === "relationship" && change.field === "strength")
+    ).toBe(true);
+    expect(firstTurn?.callSummary.calls).toBeGreaterThan(1);
+
+    const saveAfterFirst = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie
+      }
+    });
+    const firstState = saveAfterFirst.json<Save>();
+
+    expect(firstState.characters[0]?.privateMemory.at(-1)).toContain("第 1 回合");
+    expect(firstState.relationships[0]?.summary).toContain("让密探逼近码头");
+
+    if (!firstTurn) {
+      throw new Error("Missing first turn");
+    }
+
+    const acceptedFirst = await app.inject({
+      method: "POST",
+      url: `/api/turns/${firstTurn.id}/accept`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(acceptedFirst.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        idempotencyKey: "orchestration-second"
+      }
+    });
+    const secondTurn = second.json<TurnJob>().turn;
+
+    expect(second.statusCode).toBe(201);
+    expect(secondTurn?.events[0]?.body).toContain("第 1 回合");
+    expect(secondTurn?.events[0]?.body).toContain("关系");
+    expect(secondTurn?.stateChanges.length).toBeGreaterThan(1);
+
+    await app.close();
+  });
 });
 
 const describeDb = process.env.RUN_DB_TESTS === "1" ? describe : describe.skip;
@@ -849,6 +931,10 @@ describeDb("FantasyWorld API database persistence", () => {
     expect(restored?.characters.length).toBe(3);
     expect(restored?.characters.find((character) => character.name === characterName)?.status).toBe("调查中");
     expect(restored?.turns[0]?.status).toBe("accepted");
+    const restoredDialogueCharacterId = restored?.turns[0]?.events[0]?.dialogue?.[0]?.characterId;
+    expect(restoredDialogueCharacterId).toBeDefined();
+    expect(restoredDialogueCharacterId).not.toBe(exportedSave.turns[0]?.events[0]?.dialogue?.[0]?.characterId);
+    expect(restored?.characters.some((character) => character.id === restoredDialogueCharacterId)).toBe(true);
 
     const importedRollback = await secondApp.inject({
       method: "POST",
