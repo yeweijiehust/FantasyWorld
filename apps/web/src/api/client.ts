@@ -5,6 +5,7 @@ import type {
   ModelConfig,
   ModelProbeInput,
   ModelProbeResult,
+  PatchTurnDraftInput,
   Save,
   SaveImport,
   SaveGenerationJob,
@@ -68,6 +69,8 @@ export const api = {
   createTurn: (saveId: string, body: CreateTurnInput) =>
     request<TurnJob>(`/api/saves/${saveId}/turns`, { method: "POST", body }),
   turnJob: (id: string) => request<TurnJob>(`/api/turn-jobs/${id}`),
+  patchTurnDraft: (id: string, body: PatchTurnDraftInput) =>
+    request<TurnJob>(`/api/turn-jobs/${id}/draft`, { method: "PATCH", body }),
   cancelTurnJob: (id: string) => request<TurnJob>(`/api/turn-jobs/${id}/cancel`, { method: "POST" }),
   retryTurnJob: (id: string) => request<TurnJob>(`/api/turn-jobs/${id}/retry`, { method: "POST" }),
   acceptTurn: (id: string) => request<Save>(`/api/turns/${id}/accept`, { method: "POST" })

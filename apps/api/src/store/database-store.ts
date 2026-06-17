@@ -7,6 +7,7 @@ import type {
   CreateTurnInput,
   Location,
   ModelConfig,
+  PatchTurnDraftInput,
   Relationship,
   Save,
   SaveGenerationJob,
@@ -19,7 +20,16 @@ import type {
 } from "@fantasy-world/shared";
 import * as dbSchema from "../db/schema.js";
 import { decryptSecret, encryptSecret } from "../security/secrets.js";
-import { buildSave, buildTurnDraft, defaultModelConfig, id, isActiveJobStatus, now } from "./prototype-store.js";
+import {
+  applyTurnDraft,
+  buildSave,
+  buildTurnDraft,
+  defaultModelConfig,
+  id,
+  isActiveJobStatus,
+  now,
+  patchTurnJobDraft
+} from "./prototype-store.js";
 import type { FantasyWorldStore, ModelCredentials } from "./types.js";
 
 type Database = NodePgDatabase<typeof dbSchema>;
@@ -376,23 +386,9 @@ export class DatabaseStore implements FantasyWorldStore {
       return active;
     }
 
-    const { job, updatedSave } = buildTurnDraft(save, input, (await this.getModelConfig()).model);
-    const turn = job.turn;
-
-    if (!turn) {
-      return undefined;
-    }
+    const { job } = buildTurnDraft(save, input, (await this.getModelConfig()).model);
 
     await this.db.transaction(async (tx) => {
-      await this.replaceSaveState(tx, updatedSave);
-      await tx.insert(dbSchema.turns).values({
-        id: turn.id,
-        saveId,
-        turnNumber: turn.turnNumber,
-        data: turn,
-        snapshot: save,
-        createdAt: new Date(turn.createdAt)
-      });
       await tx.insert(dbSchema.turnJobs).values({
         id: job.id,
         saveId,
@@ -404,6 +400,29 @@ export class DatabaseStore implements FantasyWorldStore {
     });
 
     return structuredClone(job);
+  }
+
+  async patchTurnDraft(jobId: string, input: PatchTurnDraftInput): Promise<TurnJob | undefined> {
+    const row = await this.db.query.turnJobs.findFirst({
+      where: eq(dbSchema.turnJobs.id, jobId)
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const patched = patchTurnJobDraft(row.data as TurnJob, input);
+
+    if (!patched) {
+      return undefined;
+    }
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: patched.status, data: patched, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(patched);
   }
 
   async cancelTurnJob(jobId: string): Promise<TurnJob | undefined> {
@@ -473,33 +492,19 @@ export class DatabaseStore implements FantasyWorldStore {
       return undefined;
     }
 
-    const { job: retried, updatedSave } = buildTurnDraft(
+    const { job: retried } = buildTurnDraft(
       save,
       job.input ?? {},
       (await this.getModelConfig()).model,
       job.id,
       job.idempotencyKey
     );
-    const turn = retried.turn;
-
-    if (!turn) {
-      return undefined;
-    }
 
     await this.db.transaction(async (tx) => {
       if (job.turn) {
         await tx.delete(dbSchema.turns).where(eq(dbSchema.turns.id, job.turn.id));
       }
 
-      await this.replaceSaveState(tx, updatedSave);
-      await tx.insert(dbSchema.turns).values({
-        id: turn.id,
-        saveId: job.saveId,
-        turnNumber: turn.turnNumber,
-        data: turn,
-        snapshot: save,
-        createdAt: new Date(turn.createdAt)
-      });
       await tx
         .update(dbSchema.turnJobs)
         .set({ status: retried.status, data: retried, updatedAt: new Date() })
@@ -510,48 +515,56 @@ export class DatabaseStore implements FantasyWorldStore {
   }
 
   async acceptTurn(turnId: string): Promise<Save | undefined> {
-    const turnRow = await this.db.query.turns.findFirst({
-      where: eq(dbSchema.turns.id, turnId)
-    });
+    const jobRows = await this.db.select().from(dbSchema.turnJobs);
+    const jobRow = jobRows.find((row) => (row.data as TurnJob).turn?.id === turnId);
 
-    if (!turnRow) {
+    if (!jobRow) {
       return undefined;
     }
 
-    const turn = turnRow.data as Turn;
-    const acceptedTurn: Turn = {
-      ...turn,
-      status: "accepted"
-    };
-    const save = await this.readSave(turnRow.saveId);
+    const job = jobRow.data as TurnJob;
+
+    if (job.status === "accepted") {
+      return this.readSave(job.saveId);
+    }
+
+    const save = await this.readSave(job.saveId);
 
     if (!save) {
       return undefined;
     }
 
+    const updatedSave = applyTurnDraft(save, job);
+    const acceptedTurn = updatedSave?.turns.find((turn) => turn.id === turnId);
+
+    if (!updatedSave || !acceptedTurn || !job.turn) {
+      return undefined;
+    }
+
+    const acceptedJob: TurnJob = {
+      ...job,
+      status: "accepted",
+      phase: "accepted",
+      turn: acceptedTurn
+    };
+
     await this.db.transaction(async (tx) => {
-      await tx.update(dbSchema.turns).set({ data: acceptedTurn }).where(eq(dbSchema.turns.id, turnId));
-      await tx.update(dbSchema.saves).set({ updatedAt: new Date() }).where(eq(dbSchema.saves.id, turnRow.saveId));
-      const jobs = await tx.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, turnRow.saveId));
-
-      for (const jobRow of jobs) {
-        const job = jobRow.data as TurnJob;
-
-        if (job.turn?.id === turnId) {
-          const acceptedJob: TurnJob = {
-            ...job,
-            status: "accepted",
-            turn: acceptedTurn
-          };
-          await tx
-            .update(dbSchema.turnJobs)
-            .set({ status: acceptedJob.status, data: acceptedJob, updatedAt: new Date() })
-            .where(eq(dbSchema.turnJobs.id, jobRow.id));
-        }
-      }
+      await this.replaceSaveState(tx, updatedSave);
+      await tx.insert(dbSchema.turns).values({
+        id: acceptedTurn.id,
+        saveId: job.saveId,
+        turnNumber: acceptedTurn.turnNumber,
+        data: acceptedTurn,
+        snapshot: save,
+        createdAt: new Date(acceptedTurn.createdAt)
+      });
+      await tx
+        .update(dbSchema.turnJobs)
+        .set({ status: acceptedJob.status, data: acceptedJob, updatedAt: new Date() })
+        .where(eq(dbSchema.turnJobs.id, jobRow.id));
     });
 
-    return this.readSave(turnRow.saveId);
+    return this.readSave(job.saveId);
   }
 
   async rollbackSave(saveId: string): Promise<Save | undefined> {

@@ -4,8 +4,10 @@ import {
   type Character,
   type CreateSaveInput,
   type Language,
+  type PatchTurnDraftInput,
   type Save,
   type SaveGenerationJob,
+  type StateChange,
   type TurnJob
 } from "@fantasy-world/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -593,7 +595,6 @@ function Timeline({ save }: { save: Save }) {
   const queryClient = useQueryClient();
   const [instruction, setInstruction] = useState("");
   const [turnJobId, setTurnJobId] = useState(() => localStorage.getItem(turnJobStorageKey(save.id)));
-  const latestTurn = save.turns.at(-1);
   const turnJob = useQuery({
     queryKey: ["turn-job", turnJobId],
     queryFn: () => api.turnJob(turnJobId ?? ""),
@@ -614,11 +615,15 @@ function Timeline({ save }: { save: Save }) {
       await queryClient.invalidateQueries({ queryKey: ["saves"] });
     }
   });
-  const activeTurnJob = turn.data ?? turnJob.data;
+  const activeTurnJob = turnJob.data ?? turn.data;
   const activeTurnJobIsOpen =
     activeTurnJob?.status === "queued" ||
     activeTurnJob?.status === "running" ||
     activeTurnJob?.status === "needs_review";
+  const draftTurn = activeTurnJob?.status === "needs_review" ? activeTurnJob.turn : undefined;
+  const displayedTurns =
+    draftTurn && !save.turns.some((turnItem) => turnItem.id === draftTurn.id) ? [...save.turns, draftTurn] : save.turns;
+  const latestTurn = draftTurn ?? save.turns.at(-1);
   const rollback = useMutation({
     mutationFn: () => api.rollbackSave(save.id),
     onSuccess: refreshSave
@@ -725,7 +730,7 @@ function Timeline({ save }: { save: Save }) {
         </div>
       </div>
       <div className="flex-1 p-4">
-        {save.turns.length === 0 ? (
+        {displayedTurns.length === 0 ? (
           <div className="grid min-h-72 place-items-center rounded-lg border border-dashed border-slate-300 text-center">
             <div>
               <BookOpen className="mx-auto mb-3 text-slate-400" />
@@ -737,10 +742,13 @@ function Timeline({ save }: { save: Save }) {
           </div>
         ) : (
           <div className="grid gap-3">
-            {save.turns.map((turnItem) => (
+            {displayedTurns.map((turnItem) => (
               <article key={turnItem.id} className="rounded-lg border border-slate-200 p-4">
-                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Turn {turnItem.turnNumber}
+                <div className="mb-2 flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  <span>Turn {turnItem.turnNumber}</span>
+                  {turnItem.status === "needs_review" ? (
+                    <span className="rounded bg-amber-50 px-2 py-1 text-amber-700">Draft</span>
+                  ) : null}
                 </div>
                 {turnItem.events.map((event) => (
                   <div key={event.id}>
@@ -765,6 +773,9 @@ function Timeline({ save }: { save: Save }) {
           </div>
         )}
       </div>
+      {activeTurnJob?.status === "needs_review" && activeTurnJob.turn && activeTurnJob.draftState ? (
+        <TurnDraftEditor key={`${activeTurnJob.id}:${activeTurnJob.turn.id}`} job={activeTurnJob} save={save} />
+      ) : null}
       <div className="border-t border-slate-200 p-4">
         <label className="grid gap-2 text-sm font-medium text-slate-700">
           GM intervention
@@ -834,6 +845,206 @@ function Timeline({ save }: { save: Save }) {
         {exportSave.error ? <p className="mt-2 text-sm text-red-600">{exportSave.error.message}</p> : null}
       </div>
     </div>
+  );
+}
+
+function TurnDraftEditor({ job, save }: { job: TurnJob; save: Save }) {
+  const queryClient = useQueryClient();
+  const event = job.turn?.events[0];
+  const [title, setTitle] = useState(event?.title ?? "");
+  const [body, setBody] = useState(event?.body ?? "");
+  const [stateChanges, setStateChanges] = useState<StateChange[]>(job.turn?.stateChanges ?? []);
+  const [characterUpdates, setCharacterUpdates] = useState(job.draftState?.characterUpdates ?? []);
+  const [relationshipUpdates, setRelationshipUpdates] = useState(job.draftState?.relationshipUpdates ?? []);
+  const characterNames = useMemo(
+    () => new Map(save.characters.map((character) => [character.id, character.name])),
+    [save.characters]
+  );
+  const relationshipNames = useMemo(
+    () => new Map(save.relationships.map((relationship) => [relationship.id, relationship.label])),
+    [save.relationships]
+  );
+  const patch = useMutation({
+    mutationFn: () => {
+      const payload: PatchTurnDraftInput = {
+        event: { title, body },
+        stateChanges,
+        characterUpdates,
+        relationshipUpdates
+      };
+
+      return api.patchTurnDraft(job.id, payload);
+    },
+    onSuccess: (patched) => {
+      queryClient.setQueryData(["turn-job", patched.id], patched);
+    }
+  });
+
+  const updateStateChange = (index: number, patchValue: Partial<StateChange>) => {
+    setStateChanges((current) =>
+      current.map((change, changeIndex) => (changeIndex === index ? { ...change, ...patchValue } : change))
+    );
+  };
+  const updateCharacter = (characterId: string, patchValue: (typeof characterUpdates)[number]) => {
+    setCharacterUpdates((current) =>
+      current.map((update) => (update.characterId === characterId ? { ...update, ...patchValue } : update))
+    );
+  };
+  const updateRelationship = (relationshipId: string, patchValue: (typeof relationshipUpdates)[number]) => {
+    setRelationshipUpdates((current) =>
+      current.map((update) => (update.relationshipId === relationshipId ? { ...update, ...patchValue } : update))
+    );
+  };
+
+  return (
+    <section className="border-t border-amber-200 bg-amber-50/60 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-950">Turn draft review</h2>
+        </div>
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+          type="button"
+          disabled={patch.isPending}
+          onClick={() => patch.mutate()}
+        >
+          <SaveIcon size={14} />
+          {patch.isPending ? "Saving..." : "Save draft"}
+        </button>
+      </div>
+      <div className="grid gap-4">
+        <div className="grid gap-2">
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            Event title
+            <input
+              aria-label="Draft event title"
+              className="h-9 rounded-md border border-slate-300 px-3 text-sm text-slate-950"
+              value={title}
+              onChange={(item) => setTitle(item.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            Event body
+            <textarea
+              aria-label="Draft event body"
+              className="min-h-24 rounded-md border border-slate-300 px-3 py-2 text-sm leading-6 text-slate-950"
+              value={body}
+              onChange={(item) => setBody(item.target.value)}
+            />
+          </label>
+        </div>
+        <div>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">State changes</div>
+          <div className="grid gap-2">
+            {stateChanges.map((change, index) => (
+              <div key={change.id} className="grid gap-2 rounded-md border border-amber-200 bg-white p-3">
+                <div className="text-xs font-medium text-slate-700">
+                  {change.targetType}.{change.field}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <input
+                    aria-label={`State change ${index + 1} field`}
+                    className="h-8 rounded-md border border-slate-300 px-2 text-xs text-slate-950"
+                    value={change.field}
+                    onChange={(item) => updateStateChange(index, { field: item.target.value })}
+                  />
+                  <input
+                    aria-label={`State change ${index + 1} before`}
+                    className="h-8 rounded-md border border-slate-300 px-2 text-xs text-slate-950"
+                    value={change.before}
+                    onChange={(item) => updateStateChange(index, { before: item.target.value })}
+                  />
+                  <input
+                    aria-label={`State change ${index + 1} after`}
+                    className="h-8 rounded-md border border-slate-300 px-2 text-xs text-slate-950"
+                    value={change.after}
+                    onChange={(item) => updateStateChange(index, { after: item.target.value })}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {characterUpdates.map((update) => (
+            <div key={update.characterId} className="grid gap-2 rounded-md border border-amber-200 bg-white p-3">
+              <div className="text-sm font-semibold text-slate-900">
+                {characterNames.get(update.characterId) ?? update.characterId}
+              </div>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                Short-term goal
+                <input
+                  aria-label={`Short-term goal ${update.characterId}`}
+                  className="h-8 rounded-md border border-slate-300 px-2 text-xs text-slate-950"
+                  value={update.shortTermGoal ?? ""}
+                  onChange={(item) =>
+                    updateCharacter(update.characterId, { ...update, shortTermGoal: item.target.value })
+                  }
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                Long-term goal
+                <input
+                  aria-label={`Long-term goal ${update.characterId}`}
+                  className="h-8 rounded-md border border-slate-300 px-2 text-xs text-slate-950"
+                  value={update.longTermGoal ?? ""}
+                  onChange={(item) =>
+                    updateCharacter(update.characterId, { ...update, longTermGoal: item.target.value })
+                  }
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                Private memory
+                <textarea
+                  aria-label={`Private memory ${update.characterId}`}
+                  className="min-h-24 rounded-md border border-slate-300 px-2 py-2 text-xs leading-5 text-slate-950"
+                  value={(update.privateMemory ?? []).join("\n")}
+                  onChange={(item) =>
+                    updateCharacter(update.characterId, {
+                      ...update,
+                      privateMemory: item.target.value.split("\n").filter(Boolean)
+                    })
+                  }
+                />
+              </label>
+            </div>
+          ))}
+          {relationshipUpdates.map((update) => (
+            <div key={update.relationshipId} className="grid gap-2 rounded-md border border-amber-200 bg-white p-3">
+              <div className="text-sm font-semibold text-slate-900">
+                {relationshipNames.get(update.relationshipId) ?? update.relationshipId}
+              </div>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                Strength
+                <input
+                  aria-label={`Relationship strength ${update.relationshipId}`}
+                  className="h-8 rounded-md border border-slate-300 px-2 text-xs text-slate-950"
+                  type="number"
+                  min={-100}
+                  max={100}
+                  value={update.strength ?? 0}
+                  onChange={(item) =>
+                    updateRelationship(update.relationshipId, { ...update, strength: Number(item.target.value) })
+                  }
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-slate-600">
+                Summary
+                <textarea
+                  aria-label={`Relationship summary ${update.relationshipId}`}
+                  className="min-h-24 rounded-md border border-slate-300 px-2 py-2 text-xs leading-5 text-slate-950"
+                  value={update.summary ?? ""}
+                  onChange={(item) =>
+                    updateRelationship(update.relationshipId, { ...update, summary: item.target.value })
+                  }
+                />
+              </label>
+            </div>
+          ))}
+        </div>
+      </div>
+      {patch.error ? <p className="mt-2 text-sm text-red-600">{patch.error.message}</p> : null}
+    </section>
   );
 }
 

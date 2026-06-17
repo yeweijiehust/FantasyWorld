@@ -7,11 +7,13 @@ import type {
   ModelConfig,
   CharacterPatch,
   Relationship,
+  PatchTurnDraftInput,
   Save,
   SaveGenerationJob,
   SaveImport,
   SaveListItem,
   Turn,
+  TurnDraftState,
   TurnJob
 } from "@fantasy-world/shared";
 import { getWorldTemplate } from "@fantasy-world/shared";
@@ -311,14 +313,27 @@ export class PrototypeStore implements FantasyWorldStore {
       return structuredClone(active);
     }
 
-    const { job, updatedSave } = buildTurnDraft(save, input, this.modelConfig.model);
-
-    const snapshots = this.rollbackSnapshots.get(saveId) ?? [];
-    this.rollbackSnapshots.set(saveId, [...snapshots, structuredClone(save)]);
-    this.saves.set(saveId, updatedSave);
+    const { job } = buildTurnDraft(save, input, this.modelConfig.model);
     this.turnJobs.set(job.id, job);
 
     return structuredClone(job);
+  }
+
+  patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    const patched = patchTurnJobDraft(job, input);
+
+    if (!patched) {
+      return undefined;
+    }
+
+    this.turnJobs.set(jobId, patched);
+    return structuredClone(patched);
   }
 
   cancelTurnJob(jobId: string): TurnJob | undefined {
@@ -330,17 +345,6 @@ export class PrototypeStore implements FantasyWorldStore {
 
     if (!isActiveJobStatus(job.status)) {
       return structuredClone(job);
-    }
-
-    if (job.turn) {
-      const save = this.saves.get(job.saveId);
-      const snapshots = this.rollbackSnapshots.get(job.saveId) ?? [];
-      const previous = snapshots.at(-1);
-
-      if (save?.turns.some((turn) => turn.id === job.turn?.id) && previous) {
-        this.rollbackSnapshots.set(job.saveId, snapshots.slice(0, -1));
-        this.saves.set(job.saveId, structuredClone({ ...previous, updatedAt: now() }));
-      }
     }
 
     const cancelled: TurnJob = {
@@ -374,44 +378,38 @@ export class PrototypeStore implements FantasyWorldStore {
       return undefined;
     }
 
-    const { job: retried, updatedSave } = buildTurnDraft(
-      save,
-      job.input ?? {},
-      this.modelConfig.model,
-      job.id,
-      job.idempotencyKey
-    );
-    const snapshots = this.rollbackSnapshots.get(job.saveId) ?? [];
+    const { job: retried } = buildTurnDraft(save, job.input ?? {}, this.modelConfig.model, job.id, job.idempotencyKey);
 
-    this.rollbackSnapshots.set(job.saveId, [...snapshots, structuredClone(save)]);
-    this.saves.set(job.saveId, updatedSave);
     this.turnJobs.set(jobId, retried);
 
     return structuredClone(retried);
   }
 
   acceptTurn(turnId: string): Save | undefined {
-    const save = [...this.saves.values()].find((item) => item.turns.some((turn) => turn.id === turnId));
+    const jobEntry = [...this.turnJobs.entries()].find(([, job]) => job.turn?.id === turnId);
+
+    if (!jobEntry) {
+      return undefined;
+    }
+
+    const [jobId, job] = jobEntry;
+    const save = this.saves.get(job.saveId);
 
     if (!save) {
       return undefined;
     }
 
-    const updatedTurns = save.turns.map((turn) =>
-      turn.id === turnId ? { ...turn, status: "accepted" as const } : turn
-    );
-    const updatedSave: Save = {
-      ...save,
-      turns: updatedTurns,
-      updatedAt: now()
-    };
+    const updatedSave = applyTurnDraft(save, job);
 
-    for (const [jobId, job] of this.turnJobs.entries()) {
-      if (job.turn?.id === turnId) {
-        this.turnJobs.set(jobId, { ...job, status: "accepted", turn: { ...job.turn, status: "accepted" } });
-      }
+    if (!updatedSave || !job.turn) {
+      return undefined;
     }
 
+    const snapshots = this.rollbackSnapshots.get(save.id) ?? [];
+    const acceptedTurn: Turn = { ...job.turn, status: "accepted" };
+
+    this.rollbackSnapshots.set(save.id, [...snapshots, structuredClone(save)]);
+    this.turnJobs.set(jobId, { ...job, status: "accepted", phase: "accepted", turn: acceptedTurn });
     this.saves.set(save.id, updatedSave);
     return structuredClone(updatedSave);
   }
@@ -580,6 +578,37 @@ export function buildTurnDraft(
       summary: update.summary
     };
   });
+  const draftState: TurnDraftState = {
+    worldMemory: orchestration.worldMemory,
+    characterUpdates: updatedCharacters
+      .filter((character) => {
+        const current = save.characters.find((item) => item.id === character.id);
+        return (
+          current &&
+          (current.status !== character.status ||
+            current.longTermGoal !== character.longTermGoal ||
+            current.shortTermGoal !== character.shortTermGoal ||
+            current.privateMemory.join("\n") !== character.privateMemory.join("\n"))
+        );
+      })
+      .map((character) => ({
+        characterId: character.id,
+        status: character.status,
+        longTermGoal: character.longTermGoal,
+        shortTermGoal: character.shortTermGoal,
+        privateMemory: character.privateMemory
+      })),
+    relationshipUpdates: updatedRelationships
+      .filter((relationship) => {
+        const current = save.relationships.find((item) => item.id === relationship.id);
+        return current && (current.strength !== relationship.strength || current.summary !== relationship.summary);
+      })
+      .map((relationship) => ({
+        relationshipId: relationship.id,
+        strength: relationship.strength,
+        summary: relationship.summary
+      }))
+  };
   const updatedSave: Save = {
     ...save,
     turnNumber,
@@ -600,8 +629,140 @@ export function buildTurnDraft(
     phase: "ready_for_review",
     input,
     ...(idempotencyKey ? { idempotencyKey } : {}),
-    turn
+    turn,
+    draftState
   };
 
   return { job, updatedSave };
+}
+
+export function patchTurnJobDraft(job: TurnJob, input: PatchTurnDraftInput): TurnJob | undefined {
+  if (job.status !== "needs_review" || !job.turn || !job.draftState) {
+    return undefined;
+  }
+
+  const [primaryEvent, ...remainingEvents] = job.turn.events;
+  const events =
+    input.event && primaryEvent
+      ? [
+          {
+            ...primaryEvent,
+            title: input.event.title ?? primaryEvent.title,
+            body: input.event.body ?? primaryEvent.body
+          },
+          ...remainingEvents
+        ]
+      : job.turn.events;
+  const draftState: TurnDraftState = {
+    ...job.draftState,
+    characterUpdates: mergeCharacterDraftUpdates(job.draftState.characterUpdates, input.characterUpdates ?? []),
+    relationshipUpdates: mergeRelationshipDraftUpdates(
+      job.draftState.relationshipUpdates,
+      input.relationshipUpdates ?? []
+    )
+  };
+
+  return {
+    ...job,
+    phase: "ready_for_review",
+    turn: {
+      ...job.turn,
+      events,
+      stateChanges: input.stateChanges ?? job.turn.stateChanges
+    },
+    draftState
+  };
+}
+
+export function applyTurnDraft(save: Save, job: TurnJob): Save | undefined {
+  if (!job.turn || !job.draftState) {
+    return undefined;
+  }
+
+  const acceptedTurn: Turn = {
+    ...job.turn,
+    status: "accepted"
+  };
+  const characterUpdates = new Map(job.draftState.characterUpdates.map((update) => [update.characterId, update]));
+  const relationshipUpdates = new Map(
+    job.draftState.relationshipUpdates.map((update) => [update.relationshipId, update])
+  );
+  const characters = save.characters.map((character) => {
+    const update = characterUpdates.get(character.id);
+
+    if (!update) {
+      return character;
+    }
+
+    return {
+      ...character,
+      status: update.status ?? character.status,
+      longTermGoal: update.longTermGoal ?? character.longTermGoal,
+      shortTermGoal: update.shortTermGoal ?? character.shortTermGoal,
+      privateMemory: update.privateMemory ?? character.privateMemory
+    };
+  });
+  const relationships = save.relationships.map((relationship) => {
+    const update = relationshipUpdates.get(relationship.id);
+
+    if (!update) {
+      return relationship;
+    }
+
+    return {
+      ...relationship,
+      strength: update.strength ?? relationship.strength,
+      summary: update.summary ?? relationship.summary
+    };
+  });
+  const primaryEvent = acceptedTurn.events[0];
+  const timelineEntry = primaryEvent
+    ? `${acceptedTurn.turnNumber}. ${primaryEvent.title}: ${primaryEvent.body}`
+    : job.draftState.worldMemory.timelineEntry;
+
+  return {
+    ...save,
+    turnNumber: Math.max(save.turnNumber, acceptedTurn.turnNumber),
+    characters,
+    relationships,
+    turns: [...save.turns.filter((turn) => turn.id !== acceptedTurn.id), acceptedTurn],
+    worldMemory: {
+      ...save.worldMemory,
+      timeline: [...save.worldMemory.timeline, timelineEntry],
+      worldSummary: `${save.worldMemory.worldSummary}\n${job.draftState.worldMemory.summaryDelta}`
+    },
+    updatedAt: now()
+  };
+}
+
+function mergeCharacterDraftUpdates(
+  current: TurnDraftState["characterUpdates"],
+  incoming: TurnDraftState["characterUpdates"]
+) {
+  const updates = new Map(current.map((update) => [update.characterId, update]));
+
+  for (const update of incoming) {
+    updates.set(update.characterId, {
+      ...(updates.get(update.characterId) ?? { characterId: update.characterId }),
+      ...update
+    });
+  }
+
+  return [...updates.values()];
+}
+
+function mergeRelationshipDraftUpdates(
+  current: TurnDraftState["relationshipUpdates"],
+  incoming: TurnDraftState["relationshipUpdates"]
+) {
+  const updates = new Map(current.map((update) => [update.relationshipId, update]));
+
+  for (const update of incoming) {
+    updates.set(update.relationshipId, {
+      ...(updates.get(update.relationshipId) ?? { relationshipId: update.relationshipId }),
+      ...update
+    });
+  }
+
+  return [...updates.values()];
 }
