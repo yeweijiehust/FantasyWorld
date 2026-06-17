@@ -15,13 +15,12 @@ import type {
   PatchTurnDraftInput,
   Save,
   SaveGenerationJob,
-  SaveImport,
   SaveListItem,
   Turn,
   TurnDraftState,
   TurnJob
 } from "@fantasy-world/shared";
-import { getWorldTemplate } from "@fantasy-world/shared";
+import { CURRENT_SAVE_SCHEMA_VERSION, getWorldTemplate } from "@fantasy-world/shared";
 import { clampRelationshipStrength, createTurnOrchestration } from "../turn/orchestrator.js";
 import type { FantasyWorldStore, ModelCredentials } from "./types.js";
 
@@ -234,7 +233,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(accepted);
   }
 
-  importSave(input: SaveImport): Save {
+  importSave(input: Save): Save {
     const imported = structuredClone(input);
     const importedId = this.saves.has(imported.id) ? id("save") : imported.id;
     const importedAt = now();
@@ -689,7 +688,7 @@ export function buildSave(input: CreateSaveInput): Save {
     id: id("save"),
     name: input.name,
     description: premise,
-    schemaVersion: "1",
+    schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
     turnNumber: 0,
     saveSeed: id("seed"),
     settings: input.settings,

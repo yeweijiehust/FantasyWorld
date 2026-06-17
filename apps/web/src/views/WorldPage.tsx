@@ -9,6 +9,7 @@ import {
   type Relationship,
   type Save,
   type SaveGenerationJob,
+  type SaveImport,
   type StateChange,
   type TurnJob
 } from "@fantasy-world/shared";
@@ -318,9 +319,8 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     }
 
     try {
-      const parsed = JSON.parse(await file.text()) as Save | { save: Save };
-      const imported = typeof parsed === "object" && parsed !== null && "save" in parsed ? parsed.save : parsed;
-      importSave.mutate(imported);
+      const parsed = JSON.parse(await file.text()) as SaveImport;
+      importSave.mutate(parsed);
     } catch (error) {
       setImportMessage("");
       setImportError(error instanceof Error ? error.message : "Invalid JSON");

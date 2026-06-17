@@ -12,6 +12,7 @@ import type {
   PatchTurnDraftInput,
   RelationshipPatch,
   Save,
+  SaveExport,
   SaveImport,
   SaveGenerationJob,
   SaveListItem,
@@ -58,7 +59,7 @@ export const api = {
   save: (id: string) => request<Save>(`/api/saves/${id}`),
   patchSave: (id: string, body: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>) =>
     request<Save>(`/api/saves/${id}`, { method: "PATCH", body }),
-  exportSave: (id: string) => request<Save>(`/api/saves/${id}/export`),
+  exportSave: (id: string) => request<SaveExport>(`/api/saves/${id}/export`),
   importSave: (body: SaveImport) => request<Save>("/api/saves/import", { method: "POST", body }),
   rollbackSave: (id: string) => request<Save>(`/api/saves/${id}/rollback`, { method: "POST" }),
   patchCharacter: (saveId: string, characterId: string, body: CharacterPatch) =>

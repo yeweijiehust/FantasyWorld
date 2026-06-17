@@ -10,6 +10,7 @@ import type {
   ModelConfig,
   ModelProbeResult,
   Save,
+  SaveExport,
   SaveGenerationJob,
   SaveListItem,
   TurnJob
@@ -651,6 +652,9 @@ describe("FantasyWorld API prototype", () => {
     });
 
     expect(exported.statusCode).toBe(200);
+    const exportedPackage = exported.json<SaveExport>();
+    expect(exportedPackage.schemaVersion).toBe("1");
+    expect(exportedPackage.save.turnNumber).toBe(1);
 
     const imported = await app.inject({
       method: "POST",
@@ -658,11 +662,69 @@ describe("FantasyWorld API prototype", () => {
       headers: {
         cookie
       },
-      payload: exported.json()
+      payload: exportedPackage
     });
 
     expect(imported.statusCode).toBe(201);
     expect(imported.json<{ id: string; name: string }>().name).toBe("雾港纪元");
+
+    const importedTurn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${imported.json<Save>().id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        idempotencyKey: "imported-turn"
+      }
+    });
+
+    expect(importedTurn.statusCode).toBe(201);
+
+    const unsupportedVersion = await app.inject({
+      method: "POST",
+      url: "/api/saves/import",
+      headers: {
+        cookie
+      },
+      payload: {
+        schemaVersion: "999",
+        save: exportedPackage.save
+      }
+    });
+
+    expect(unsupportedVersion.statusCode).toBe(400);
+    expect(unsupportedVersion.json<{ error: { code: string } }>().error.code).toBe("unsupported_schema_version");
+
+    const missingFields = await app.inject({
+      method: "POST",
+      url: "/api/saves/import",
+      headers: {
+        cookie
+      },
+      payload: {
+        schemaVersion: "1",
+        save: {
+          schemaVersion: "1"
+        }
+      }
+    });
+
+    expect(missingFields.statusCode).toBe(400);
+    expect(missingFields.json<{ error: { code: string } }>().error.code).toBe("invalid_save_import");
+
+    const malformedJson = await app.inject({
+      method: "POST",
+      url: "/api/saves/import",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      payload: "{"
+    });
+
+    expect(malformedJson.statusCode).toBe(400);
+    expect(malformedJson.json<{ error: { code: string } }>().error.code).toBe("request_error");
 
     const rollback = await app.inject({
       method: "POST",
@@ -1230,10 +1292,12 @@ describeDb("FantasyWorld API database persistence", () => {
     });
 
     expect(exported.statusCode).toBe(200);
-    const exportedSave = exported.json<Save>();
+    const exportedPackage = exported.json<SaveExport>();
+    const exportedSave = exportedPackage.save;
+    expect(exportedPackage.schemaVersion).toBe("1");
     expect(exportedSave.turnNumber).toBe(1);
     expect(exportedSave.turns[0]?.status).toBe("accepted");
-    expect(JSON.stringify(exportedSave)).not.toContain(apiKey);
+    expect(JSON.stringify(exportedPackage)).not.toContain(apiKey);
 
     const rollback = await firstApp.inject({
       method: "POST",
@@ -1253,7 +1317,7 @@ describeDb("FantasyWorld API database persistence", () => {
       headers: {
         cookie
       },
-      payload: exportedSave
+      payload: exportedPackage
     });
 
     expect(imported.statusCode).toBe(201);

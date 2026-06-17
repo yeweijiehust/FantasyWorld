@@ -20,6 +20,7 @@ import {
   ModelProbeResultSchema,
   PatchTurnDraftInputSchema,
   RelationshipPatchSchema,
+  SaveExportSchema,
   SaveGenerationJobSchema,
   SaveImportSchema,
   SaveListItemSchema,
@@ -31,6 +32,7 @@ import Fastify, { type FastifyError } from "fastify";
 import { Type } from "typebox";
 import { verifyPassword } from "./auth/password.js";
 import type { AppEnv } from "./config/env.js";
+import { createSaveExport, normalizeSaveImport } from "./import-export.js";
 import { LlmService } from "./llm/service.js";
 import { prototypeStore } from "./store/prototype-store.js";
 import type { FantasyWorldStore } from "./store/types.js";
@@ -305,14 +307,14 @@ export function buildApp(options: BuildAppOptions) {
       schema: {
         params: SaveParamsSchema,
         response: {
-          200: SaveSchema,
+          200: SaveExportSchema,
           404: ApiErrorSchema
         }
       }
     },
     async (request, reply) => {
       const save = await store.getSave(request.params.id);
-      return save ?? sendError(reply, 404, "not_found", "Save not found");
+      return save ? createSaveExport(save) : sendError(reply, 404, "not_found", "Save not found");
     }
   );
 
@@ -322,13 +324,20 @@ export function buildApp(options: BuildAppOptions) {
       schema: {
         body: SaveImportSchema,
         response: {
-          201: SaveSchema
+          201: SaveSchema,
+          400: ApiErrorSchema
         }
       }
     },
     async (request, reply) => {
+      const imported = normalizeSaveImport(request.body);
+
+      if (!imported.ok) {
+        return sendError(reply, 400, imported.code, imported.message);
+      }
+
       reply.code(201);
-      return await store.importSave(request.body);
+      return await store.importSave(imported.save);
     }
   );
 
