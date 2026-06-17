@@ -1,4 +1,11 @@
-import type { Character, CreateSaveInput, Save } from "@fantasy-world/shared";
+import {
+  WORLD_TEMPLATES,
+  createTemplateSaveInput,
+  type Character,
+  type CreateSaveInput,
+  type Language,
+  type Save
+} from "@fantasy-world/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -14,17 +21,42 @@ import {
   Users
 } from "lucide-react";
 import { type ChangeEvent, useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
 import { api } from "../api/client.js";
 import { useUiStore } from "../state/ui.js";
 
-const defaultSettings: CreateSaveInput["settings"] = {
-  language: "zh",
-  turnTimeScale: "一幕",
-  randomness: 25,
-  contentBoundary: "PG-13",
-  styleGuide: "一致性优先，保持角色信息差"
+const wizardSteps = ["Template", "World", "Cast", "Rules", "Draft"];
+const defaultTemplateInput = createTemplateSaveInput("fantasy-frontier", "zh");
+
+type WizardValues = {
+  templateId: string;
+  language: Language;
+  name: string;
+  premise: string;
+  turnTimeScale: string;
+  randomness: number;
+  contentBoundary: string;
+  styleGuide: string;
+  modelBaseUrl: string;
+  modelName: string;
 };
+
+function toWizardValues(
+  input: CreateSaveInput,
+  previous?: Pick<WizardValues, "modelBaseUrl" | "modelName">
+): WizardValues {
+  return {
+    templateId: input.templateId,
+    language: input.settings.language,
+    name: input.name,
+    premise: input.premise,
+    turnTimeScale: input.settings.turnTimeScale,
+    randomness: input.settings.randomness,
+    contentBoundary: input.settings.contentBoundary,
+    styleGuide: input.settings.styleGuide,
+    modelBaseUrl: previous?.modelBaseUrl ?? "",
+    modelName: previous?.modelName ?? ""
+  };
+}
 
 export function WorldPage() {
   const queryClient = useQueryClient();
@@ -96,23 +128,24 @@ export function WorldPage() {
 }
 
 function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<void> }) {
-  const { register, handleSubmit, reset } = useForm<CreateSaveInput>({
-    defaultValues: {
-      templateId: "fantasy-frontier",
-      name: "雾港纪元",
-      premise: "旧王国崩塌后，边境港口正在形成新的权力秩序。",
-      characterSeeds: ["艾琳", "赛勒斯", "莫娜"],
-      settings: defaultSettings
-    }
+  const [step, setStep] = useState(0);
+  const [values, setValues] = useState<WizardValues>(() => toWizardValues(defaultTemplateInput));
+  const [seedText, setSeedText] = useState(defaultTemplateInput.characterSeeds.join("\n"));
+  const [formError, setFormError] = useState("");
+  const generation = useMutation({
+    mutationFn: api.createGenerationJob,
+    onSuccess: () => setStep(4)
   });
-  const [seedText, setSeedText] = useState("艾琳\n赛勒斯\n莫娜");
-  const generation = useMutation({ mutationFn: api.createGenerationJob });
   const [importError, setImportError] = useState("");
   const [importMessage, setImportMessage] = useState("");
   const accept = useMutation({
     mutationFn: api.acceptGenerationJob,
     onSuccess: async (save) => {
-      reset();
+      const nextInput = createTemplateSaveInput(values.templateId, values.language);
+      setValues(toWizardValues(nextInput, values));
+      setSeedText(nextInput.characterSeeds.join("\n"));
+      setStep(0);
+      generation.reset();
       await onCreated(save);
     }
   });
@@ -128,16 +161,93 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       setImportError(error.message);
     }
   });
+  const selectedTemplate = WORLD_TEMPLATES.find((template) => template.id === values.templateId) ?? WORLD_TEMPLATES[0];
+  const characterSeeds = seedText
+    .split("\n")
+    .map((seed) => seed.trim())
+    .filter(Boolean);
 
-  const onSubmit = handleSubmit((values) => {
-    generation.mutate({
-      ...values,
-      characterSeeds: seedText
-        .split("\n")
-        .map((seed) => seed.trim())
-        .filter(Boolean)
-    });
-  });
+  const updateValue = <Key extends keyof WizardValues>(key: Key, value: WizardValues[Key]) => {
+    setValues((current) => ({ ...current, [key]: value }));
+    setFormError("");
+  };
+  const applyTemplate = (templateId: string, language = values.language) => {
+    const nextInput = createTemplateSaveInput(templateId, language);
+
+    setValues(toWizardValues(nextInput, values));
+    setSeedText(nextInput.characterSeeds.join("\n"));
+    setFormError("");
+    generation.reset();
+  };
+  const buildInput = (): CreateSaveInput | undefined => {
+    if (!values.name.trim() || !values.premise.trim()) {
+      setStep(1);
+      setFormError("World name and premise are required.");
+      return undefined;
+    }
+
+    if (characterSeeds.length < 3 || characterSeeds.length > 8) {
+      setStep(2);
+      setFormError("Create 3 to 8 character seeds.");
+      return undefined;
+    }
+
+    const input: CreateSaveInput = {
+      templateId: values.templateId,
+      name: values.name.trim(),
+      premise: values.premise.trim(),
+      characterSeeds,
+      settings: {
+        language: values.language,
+        turnTimeScale: values.turnTimeScale.trim(),
+        randomness: values.randomness,
+        contentBoundary: values.contentBoundary.trim(),
+        styleGuide: values.styleGuide.trim()
+      }
+    };
+    const baseUrl = values.modelBaseUrl.trim();
+    const model = values.modelName.trim();
+
+    if (baseUrl || model) {
+      input.modelOverride = {
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(model ? { model } : {})
+      };
+    }
+
+    return input;
+  };
+  const generateDraft = () => {
+    const input = buildInput();
+
+    if (!input) {
+      return;
+    }
+
+    setFormError("");
+    generation.mutate(input);
+  };
+  const handleLanguageChange = (language: Language) => {
+    applyTemplate(values.templateId, language);
+  };
+  const nextStep = () => {
+    if (step === 1 && (!values.name.trim() || !values.premise.trim())) {
+      setFormError("World name and premise are required.");
+      return;
+    }
+
+    if (step === 2 && (characterSeeds.length < 3 || characterSeeds.length > 8)) {
+      setFormError("Create 3 to 8 character seeds.");
+      return;
+    }
+
+    setFormError("");
+    setStep((current) => Math.min(current + 1, wizardSteps.length - 1));
+  };
+  const resetDraft = () => {
+    generation.reset();
+    setStep(0);
+  };
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -162,46 +272,223 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
         <Plus size={16} />
         New world
       </div>
-      <form className="grid gap-3 text-sm" onSubmit={(event) => void onSubmit(event)}>
-        <input
-          aria-label="World name"
-          className="h-9 rounded-md border border-slate-300 px-3"
-          {...register("name", { required: true })}
-        />
-        <textarea
-          aria-label="Premise"
-          className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
-          {...register("premise")}
-        />
-        <textarea
-          aria-label="Character seeds"
-          className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
-          value={seedText}
-          onChange={(event) => setSeedText(event.target.value)}
-        />
-        <button
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 font-semibold text-white disabled:opacity-60"
-          type="submit"
-          disabled={generation.isPending}
-        >
-          <Sparkles size={16} />
-          Generate draft
-        </button>
-      </form>
-      {generation.data?.draft ? (
-        <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          Draft ready: {generation.data.draft.save.characters.length} characters,{" "}
-          {generation.data.draft.save.locations.length} location.
+      <div className="grid grid-cols-5 gap-1" aria-label="Create world steps">
+        {wizardSteps.map((item, index) => (
           <button
-            className="mt-2 h-8 rounded-md bg-emerald-700 px-3 text-white disabled:opacity-60"
+            key={item}
+            className={`h-8 rounded-md text-[11px] font-medium ${
+              step === index ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
             type="button"
-            disabled={accept.isPending}
-            onClick={() => accept.mutate(generation.data.id)}
+            onClick={() => setStep(index)}
           >
-            Accept draft
+            {item}
           </button>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-3 text-sm">
+        {step === 0 ? (
+          <div className="grid gap-3">
+            <label className="grid gap-2 font-medium text-slate-700">
+              Language
+              <select
+                aria-label="World language"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                value={values.language}
+                onChange={(event) => handleLanguageChange(event.target.value as Language)}
+              >
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <div className="grid gap-2">
+              {WORLD_TEMPLATES.map((template) => (
+                <button
+                  key={template.id}
+                  className={`rounded-md border px-3 py-2 text-left ${
+                    values.templateId === template.id
+                      ? "border-slate-950 bg-slate-950 text-white"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                  type="button"
+                  onClick={() => applyTemplate(template.id)}
+                >
+                  <div className="font-semibold">{template.name[values.language]}</div>
+                  <div className={values.templateId === template.id ? "text-slate-300" : "text-slate-500"}>
+                    {template.genre[values.language]}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {step === 1 ? (
+          <div className="grid gap-3">
+            <label className="grid gap-2 font-medium text-slate-700">
+              World name
+              <input
+                aria-label="World name"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                value={values.name}
+                onChange={(event) => updateValue("name", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 font-medium text-slate-700">
+              Premise
+              <textarea
+                aria-label="Premise"
+                className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
+                value={values.premise}
+                onChange={(event) => updateValue("premise", event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+        {step === 2 ? (
+          <div className="grid gap-3">
+            <label className="grid gap-2 font-medium text-slate-700">
+              Character seeds
+              <textarea
+                aria-label="Character seeds"
+                className="min-h-28 rounded-md border border-slate-300 px-3 py-2"
+                value={seedText}
+                onChange={(event) => {
+                  setSeedText(event.target.value);
+                  setFormError("");
+                }}
+              />
+            </label>
+            <div className={characterSeeds.length < 3 || characterSeeds.length > 8 ? "text-red-600" : "text-slate-500"}>
+              {characterSeeds.length} / 3-8 characters
+            </div>
+          </div>
+        ) : null}
+        {step === 3 ? (
+          <div className="grid gap-3">
+            <label className="grid gap-2 font-medium text-slate-700">
+              Content boundary
+              <input
+                aria-label="Content boundary"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                value={values.contentBoundary}
+                onChange={(event) => updateValue("contentBoundary", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 font-medium text-slate-700">
+              Turn scale
+              <input
+                aria-label="Turn scale"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                value={values.turnTimeScale}
+                onChange={(event) => updateValue("turnTimeScale", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 font-medium text-slate-700">
+              Randomness
+              <input
+                aria-label="Randomness"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                type="number"
+                min={0}
+                max={100}
+                value={values.randomness}
+                onChange={(event) => updateValue("randomness", Number(event.target.value))}
+              />
+            </label>
+            <label className="grid gap-2 font-medium text-slate-700">
+              Style guide
+              <textarea
+                aria-label="Style guide"
+                className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
+                value={values.styleGuide}
+                onChange={(event) => updateValue("styleGuide", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 font-medium text-slate-700">
+              Model base URL
+              <input
+                aria-label="Model base URL"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                value={values.modelBaseUrl}
+                onChange={(event) => updateValue("modelBaseUrl", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 font-medium text-slate-700">
+              Model
+              <input
+                aria-label="Model override"
+                className="h-9 rounded-md border border-slate-300 px-3"
+                value={values.modelName}
+                onChange={(event) => updateValue("modelName", event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+        {step === 4 ? (
+          <div className="grid gap-3">
+            <div className="rounded-md bg-slate-50 p-3 text-slate-600">
+              {selectedTemplate.name[values.language]} · {characterSeeds.length} characters
+            </div>
+            <button
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 font-semibold text-white disabled:opacity-60"
+              type="button"
+              disabled={generation.isPending}
+              onClick={generateDraft}
+            >
+              <Sparkles size={16} />
+              Generate draft
+            </button>
+            {generation.data?.draft ? (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
+                <div className="font-semibold">Draft ready</div>
+                <div className="mt-1 text-emerald-800">
+                  {generation.data.draft.save.characters.length} characters ·{" "}
+                  {generation.data.draft.save.locations[0]?.name}
+                </div>
+                <div className="mt-2 text-xs text-emerald-800">
+                  {generation.data.draft.save.worldMemory.worldSummary}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {generation.data.draft.save.characters.map((character) => (
+                    <span key={character.id} className="rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-900">
+                      {character.name}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="h-8 rounded-md bg-emerald-700 px-3 text-white disabled:opacity-60"
+                    type="button"
+                    disabled={accept.isPending}
+                    onClick={() => accept.mutate(generation.data.id)}
+                  >
+                    Accept draft
+                  </button>
+                  <button className="h-8 rounded-md bg-white px-3 text-emerald-800" type="button" onClick={resetDraft}>
+                    Revise
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="flex justify-between gap-2">
+          <button
+            className="h-8 rounded-md border border-slate-300 px-3 text-slate-700 disabled:opacity-50"
+            type="button"
+            disabled={step === 0}
+            onClick={() => setStep((current) => Math.max(current - 1, 0))}
+          >
+            Back
+          </button>
+          {step < wizardSteps.length - 1 ? (
+            <button className="h-8 rounded-md bg-slate-950 px-3 text-white" type="button" onClick={nextStep}>
+              Next
+            </button>
+          ) : null}
         </div>
-      ) : null}
+      </div>
+      {formError ? <p className="mt-2 text-sm text-red-600">{formError}</p> : null}
       {generation.error ? <p className="mt-2 text-sm text-red-600">{generation.error.message}</p> : null}
       {accept.error ? <p className="mt-2 text-sm text-red-600">{accept.error.message}</p> : null}
       <label className="mt-3 grid gap-2 text-xs font-medium text-slate-600">
@@ -223,7 +510,6 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     </div>
   );
 }
-
 function Timeline({ save }: { save: Save }) {
   const queryClient = useQueryClient();
   const [instruction, setInstruction] = useState("");
