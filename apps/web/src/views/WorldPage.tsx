@@ -28,10 +28,17 @@ import {
   Users
 } from "lucide-react";
 import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client.js";
 import { useUiStore } from "../state/ui.js";
 
-const wizardSteps = ["Template", "World", "Cast", "Rules", "Draft"];
+const wizardSteps = [
+  { id: "template", labelKey: "world.stepTemplate" },
+  { id: "world", labelKey: "world.stepWorld" },
+  { id: "cast", labelKey: "world.stepCast" },
+  { id: "rules", labelKey: "world.stepRules" },
+  { id: "draft", labelKey: "world.stepDraft" }
+];
 const defaultTemplateInput = createTemplateSaveInput("fantasy-frontier", "zh");
 const generationJobStorageKey = "fantasyworld.currentGenerationJob";
 const turnJobStorageKey = (saveId: string) => `fantasyworld.turnJob.${saveId}`;
@@ -68,6 +75,7 @@ function toWizardValues(
 }
 
 export function WorldPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const selectedSaveId = useUiStore((state) => state.selectedSaveId);
   const setSelectedSaveId = useUiStore((state) => state.setSelectedSaveId);
@@ -88,13 +96,14 @@ export function WorldPage() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
-      <aside className="rounded-lg border border-slate-200 bg-white p-3">
+      <aside className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-950">Saves</h2>
+          <h2 className="text-sm font-semibold text-slate-950">{t("world.saves")}</h2>
           <span className="text-xs text-slate-500">{saves.data?.length ?? 0}</span>
         </div>
         <div className="grid gap-2">
-          {saves.isLoading ? <div className="text-sm text-slate-500">Loading saves...</div> : null}
+          {saves.isLoading ? <div className="text-sm text-slate-500">{t("world.loadingSaves")}</div> : null}
+          {saves.error ? <div className="text-sm text-red-600">{saves.error.message}</div> : null}
           {saves.data?.map((item) => (
             <button
               key={item.id}
@@ -106,9 +115,9 @@ export function WorldPage() {
               type="button"
               onClick={() => setSelectedSaveId(item.id)}
             >
-              <div className="font-medium">{item.name}</div>
-              <div className={selectedSaveId === item.id ? "text-slate-300" : "text-slate-500"}>
-                Turn {item.turnNumber} · {item.characterCount} chars
+              <div className="truncate font-medium">{item.name}</div>
+              <div className={selectedSaveId === item.id ? "truncate text-slate-300" : "truncate text-slate-500"}>
+                {t("world.turnSummary", { turn: item.turnNumber, characters: item.characterCount })}
               </div>
             </button>
           ))}
@@ -121,15 +130,25 @@ export function WorldPage() {
         />
       </aside>
 
-      <section className="min-h-[680px] rounded-lg border border-slate-200 bg-white">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white lg:min-h-[680px]">
+        {save.error ? <div className="p-4 text-sm text-red-600">{save.error.message}</div> : null}
         {activeSave ? <Timeline key={activeSave.id} save={activeSave} /> : <EmptyWorld />}
       </section>
 
-      <aside className="rounded-lg border border-slate-200 bg-white p-4">
+      {activeSave ? (
+        <details className="rounded-lg border border-slate-200 bg-white p-4 lg:hidden">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-950">{t("world.mobileDetails")}</summary>
+          <div className="mt-4">
+            <WorldDetails save={activeSave} />
+          </div>
+        </details>
+      ) : null}
+
+      <aside className="hidden min-w-0 rounded-lg border border-slate-200 bg-white p-4 lg:block">
         {activeSave ? (
           <WorldDetails save={activeSave} />
         ) : (
-          <div className="text-sm text-slate-500">No world selected.</div>
+          <div className="text-sm text-slate-500">{t("world.noWorldSelected")}</div>
         )}
       </aside>
     </div>
@@ -137,6 +156,7 @@ export function WorldPage() {
 }
 
 function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<void> }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(() => (localStorage.getItem(generationJobStorageKey) ? 4 : 0));
   const [values, setValues] = useState<WizardValues>(() => toWizardValues(defaultTemplateInput));
@@ -190,7 +210,7 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     mutationFn: api.importSave,
     onSuccess: async (save) => {
       setImportError("");
-      setImportMessage("Imported");
+      setImportMessage(t("world.imported"));
       await onCreated(save);
     },
     onError: (error) => {
@@ -241,13 +261,13 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
   const buildInput = (): CreateSaveInput | undefined => {
     if (!values.name.trim() || !values.premise.trim()) {
       setStep(1);
-      setFormError("World name and premise are required.");
+      setFormError(t("world.requiredWorld"));
       return undefined;
     }
 
     if (characterSeeds.length < 3 || characterSeeds.length > 8) {
       setStep(2);
-      setFormError("Create 3 to 8 character seeds.");
+      setFormError(t("world.requiredCast"));
       return undefined;
     }
 
@@ -292,12 +312,12 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
   };
   const nextStep = () => {
     if (step === 1 && (!values.name.trim() || !values.premise.trim())) {
-      setFormError("World name and premise are required.");
+      setFormError(t("world.requiredWorld"));
       return;
     }
 
     if (step === 2 && (characterSeeds.length < 3 || characterSeeds.length > 8)) {
-      setFormError("Create 3 to 8 character seeds.");
+      setFormError(t("world.requiredCast"));
       return;
     }
 
@@ -323,7 +343,7 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       importSave.mutate(parsed);
     } catch (error) {
       setImportMessage("");
-      setImportError(error instanceof Error ? error.message : "Invalid JSON");
+      setImportError(error instanceof Error ? error.message : t("world.invalidJson"));
     }
   };
 
@@ -331,19 +351,19 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     <div className="mt-4 border-t border-slate-200 pt-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-950">
         <Plus size={16} />
-        New world
+        {t("world.createHeading")}
       </div>
-      <div className="grid grid-cols-5 gap-1" aria-label="Create world steps">
+      <div className="grid grid-cols-5 gap-1" aria-label={t("world.createSteps")}>
         {wizardSteps.map((item, index) => (
           <button
-            key={item}
+            key={item.id}
             className={`h-8 rounded-md text-[11px] font-medium ${
               step === index ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
             type="button"
             onClick={() => setStep(index)}
           >
-            {item}
+            {t(item.labelKey)}
           </button>
         ))}
       </div>
@@ -351,9 +371,9 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
         {step === 0 ? (
           <div className="grid gap-3">
             <label className="grid gap-2 font-medium text-slate-700">
-              Language
+              {t("world.worldLanguage")}
               <select
-                aria-label="World language"
+                aria-label={t("world.worldLanguage")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 value={values.language}
                 onChange={(event) => handleLanguageChange(event.target.value as Language)}
@@ -386,18 +406,18 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
         {step === 1 ? (
           <div className="grid gap-3">
             <label className="grid gap-2 font-medium text-slate-700">
-              World name
+              {t("world.worldName")}
               <input
-                aria-label="World name"
+                aria-label={t("world.worldName")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 value={values.name}
                 onChange={(event) => updateValue("name", event.target.value)}
               />
             </label>
             <label className="grid gap-2 font-medium text-slate-700">
-              Premise
+              {t("world.premise")}
               <textarea
-                aria-label="Premise"
+                aria-label={t("world.premise")}
                 className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
                 value={values.premise}
                 onChange={(event) => updateValue("premise", event.target.value)}
@@ -408,9 +428,9 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
         {step === 2 ? (
           <div className="grid gap-3">
             <label className="grid gap-2 font-medium text-slate-700">
-              Character seeds
+              {t("world.characterSeeds")}
               <textarea
-                aria-label="Character seeds"
+                aria-label={t("world.characterSeeds")}
                 className="min-h-28 rounded-md border border-slate-300 px-3 py-2"
                 value={seedText}
                 onChange={(event) => {
@@ -420,34 +440,34 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
               />
             </label>
             <div className={characterSeeds.length < 3 || characterSeeds.length > 8 ? "text-red-600" : "text-slate-500"}>
-              {characterSeeds.length} / 3-8 characters
+              {t("world.characterCount", { count: characterSeeds.length })}
             </div>
           </div>
         ) : null}
         {step === 3 ? (
           <div className="grid gap-3">
             <label className="grid gap-2 font-medium text-slate-700">
-              Content boundary
+              {t("world.contentBoundary")}
               <input
-                aria-label="Content boundary"
+                aria-label={t("world.contentBoundary")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 value={values.contentBoundary}
                 onChange={(event) => updateValue("contentBoundary", event.target.value)}
               />
             </label>
             <label className="grid gap-2 font-medium text-slate-700">
-              Turn scale
+              {t("world.turnScale")}
               <input
-                aria-label="Turn scale"
+                aria-label={t("world.turnScale")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 value={values.turnTimeScale}
                 onChange={(event) => updateValue("turnTimeScale", event.target.value)}
               />
             </label>
             <label className="grid gap-2 font-medium text-slate-700">
-              Randomness
+              {t("world.randomness")}
               <input
-                aria-label="Randomness"
+                aria-label={t("world.randomness")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 type="number"
                 min={0}
@@ -457,27 +477,27 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
               />
             </label>
             <label className="grid gap-2 font-medium text-slate-700">
-              Style guide
+              {t("world.styleGuide")}
               <textarea
-                aria-label="Style guide"
+                aria-label={t("world.styleGuide")}
                 className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
                 value={values.styleGuide}
                 onChange={(event) => updateValue("styleGuide", event.target.value)}
               />
             </label>
             <label className="grid gap-2 font-medium text-slate-700">
-              Model base URL
+              {t("world.modelBaseUrl")}
               <input
-                aria-label="Model base URL"
+                aria-label={t("world.modelBaseUrl")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 value={values.modelBaseUrl}
                 onChange={(event) => updateValue("modelBaseUrl", event.target.value)}
               />
             </label>
             <label className="grid gap-2 font-medium text-slate-700">
-              Model
+              {t("world.model")}
               <input
-                aria-label="Model override"
+                aria-label={t("world.modelOverride")}
                 className="h-9 rounded-md border border-slate-300 px-3"
                 value={values.modelName}
                 onChange={(event) => updateValue("modelName", event.target.value)}
@@ -497,11 +517,11 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
               onClick={generateDraft}
             >
               <Sparkles size={16} />
-              Generate draft
+              {t("world.generateDraft")}
             </button>
             {currentGenerationJob?.draft ? (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
-                <div className="font-semibold">Draft ready</div>
+                <div className="font-semibold">{t("world.draftReady")}</div>
                 <div className="mt-1 text-emerald-800">
                   {currentGenerationJob.draft.save.characters.length} characters ·{" "}
                   {currentGenerationJob.draft.save.locations[0]?.name}
@@ -527,7 +547,7 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
                     }
                     onClick={() => accept.mutate(currentGenerationJob.id)}
                   >
-                    Accept draft
+                    {t("world.acceptDraft")}
                   </button>
                   <button
                     className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
@@ -535,7 +555,7 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
                     disabled={cancelGeneration.isPending || currentGenerationJob.status !== "needs_review"}
                     onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
                   >
-                    Cancel
+                    {t("common.cancel")}
                   </button>
                   <button
                     className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
@@ -543,10 +563,10 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
                     disabled={retryGeneration.isPending || currentGenerationJob.status === "needs_review"}
                     onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
                   >
-                    Retry
+                    {t("common.retry")}
                   </button>
                   <button className="h-8 rounded-md bg-white px-3 text-emerald-800" type="button" onClick={resetDraft}>
-                    Revise
+                    {t("common.revise")}
                   </button>
                 </div>
               </div>
@@ -560,11 +580,11 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
             disabled={step === 0}
             onClick={() => setStep((current) => Math.max(current - 1, 0))}
           >
-            Back
+            {t("common.back")}
           </button>
           {step < wizardSteps.length - 1 ? (
             <button className="h-8 rounded-md bg-slate-950 px-3 text-white" type="button" onClick={nextStep}>
-              Next
+              {t("common.next")}
             </button>
           ) : null}
         </div>
@@ -577,10 +597,10 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       <label className="mt-3 grid gap-2 text-xs font-medium text-slate-600">
         <span className="inline-flex items-center gap-2">
           <Upload size={14} />
-          Import JSON
+          {t("world.importJson")}
         </span>
         <input
-          aria-label="Import save JSON"
+          aria-label={t("world.importSaveJson")}
           className="block w-full text-xs file:mr-3 file:h-8 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-slate-700"
           type="file"
           accept="application/json"
@@ -594,6 +614,7 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
   );
 }
 function Timeline({ save }: { save: Save }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [instruction, setInstruction] = useState("");
   const [turnJobId, setTurnJobId] = useState(() => localStorage.getItem(turnJobStorageKey(save.id)));
@@ -706,7 +727,8 @@ function Timeline({ save }: { save: Save }) {
           <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex items-center gap-2 text-sm text-slate-600">
               <Clock3 size={16} />
-              Turn {save.turnNumber} · {save.settings.turnTimeScale}
+              {t("world.turnSummary", { turn: save.turnNumber, characters: save.characters.length })} ·{" "}
+              {save.settings.turnTimeScale}
             </div>
             <button
               className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
@@ -715,7 +737,7 @@ function Timeline({ save }: { save: Save }) {
               onClick={() => exportSave.mutate()}
             >
               <Download size={14} />
-              Export
+              {t("world.export")}
             </button>
             {save.turnNumber > 0 ? (
               <button
@@ -725,7 +747,7 @@ function Timeline({ save }: { save: Save }) {
                 onClick={() => rollback.mutate()}
               >
                 <RotateCcw size={14} />
-                Rollback
+                {t("world.rollback")}
               </button>
             ) : null}
           </div>
@@ -736,10 +758,8 @@ function Timeline({ save }: { save: Save }) {
           <div className="grid min-h-72 place-items-center rounded-lg border border-dashed border-slate-300 text-center">
             <div>
               <BookOpen className="mx-auto mb-3 text-slate-400" />
-              <div className="font-medium text-slate-800">The world is waiting for its first turn.</div>
-              <div className="mt-1 text-sm text-slate-500">
-                Advance once to let characters react to the opening state.
-              </div>
+              <div className="font-medium text-slate-800">{t("world.firstTurnTitle")}</div>
+              <div className="mt-1 text-sm text-slate-500">{t("world.firstTurnBody")}</div>
             </div>
           </div>
         ) : (
@@ -747,9 +767,11 @@ function Timeline({ save }: { save: Save }) {
             {displayedTurns.map((turnItem) => (
               <article key={turnItem.id} className="rounded-lg border border-slate-200 p-4">
                 <div className="mb-2 flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-wide text-slate-500">
-                  <span>Turn {turnItem.turnNumber}</span>
+                  <span>
+                    {t("world.turnSummary", { turn: turnItem.turnNumber, characters: save.characters.length })}
+                  </span>
                   {turnItem.status === "needs_review" ? (
-                    <span className="rounded bg-amber-50 px-2 py-1 text-amber-700">Draft</span>
+                    <span className="rounded bg-amber-50 px-2 py-1 text-amber-700">{t("world.draft")}</span>
                   ) : null}
                 </div>
                 {turnItem.events.map((event) => (
@@ -780,12 +802,13 @@ function Timeline({ save }: { save: Save }) {
       ) : null}
       <div className="border-t border-slate-200 p-4">
         <label className="grid gap-2 text-sm font-medium text-slate-700">
-          GM intervention
+          {t("world.gmIntervention")}
           <textarea
+            aria-label={t("world.gmIntervention")}
             className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-slate-950 outline-none focus:border-slate-950"
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
-            placeholder="让一艘陌生船只抵达港口"
+            placeholder={t("world.gmPlaceholder")}
           />
         </label>
         <div className="mt-3 flex items-center justify-between gap-3">
@@ -797,7 +820,7 @@ function Timeline({ save }: { save: Save }) {
               onClick={() => turn.mutate()}
             >
               <Play size={16} />
-              {turn.isPending ? "Advancing..." : "Advance turn"}
+              {turn.isPending ? t("world.advancing") : t("world.advanceTurn")}
             </button>
             {latestTurn ? (
               <button
@@ -807,7 +830,7 @@ function Timeline({ save }: { save: Save }) {
                 onClick={() => acceptTurn.mutate()}
               >
                 <CheckCircle2 size={16} />
-                {latestTurn.status === "accepted" ? "Turn accepted" : "Accept turn"}
+                {latestTurn.status === "accepted" ? t("world.turnAccepted") : t("world.acceptTurn")}
               </button>
             ) : null}
             {activeTurnJob ? (
@@ -818,7 +841,7 @@ function Timeline({ save }: { save: Save }) {
                   disabled={cancelTurn.isPending || activeTurnJob.status !== "needs_review"}
                   onClick={() => cancelTurn.mutate(activeTurnJob.id)}
                 >
-                  Cancel job
+                  {t("world.cancelJob")}
                 </button>
                 <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
@@ -826,7 +849,7 @@ function Timeline({ save }: { save: Save }) {
                   disabled={retryTurn.isPending || activeTurnJob.status === "needs_review"}
                   onClick={() => retryTurn.mutate(activeTurnJob.id)}
                 >
-                  Retry job
+                  {t("world.retryJob")}
                 </button>
               </>
             ) : null}
@@ -836,7 +859,7 @@ function Timeline({ save }: { save: Save }) {
               ? `Job ${activeTurnJob.status}${activeTurnJob.phase ? ` · ${activeTurnJob.phase}` : ""}`
               : latestTurn
                 ? `${latestTurn.callSummary.calls} call · ~${latestTurn.callSummary.estimatedTokens} tokens`
-                : "Mock LLM ready"}
+                : t("world.mockReady")}
           </div>
         </div>
         {turn.error ? <p className="mt-2 text-sm text-red-600">{turn.error.message}</p> : null}
@@ -1718,14 +1741,14 @@ function splitLines(value: string) {
 }
 
 function EmptyWorld() {
+  const { t } = useTranslation();
+
   return (
     <div className="grid min-h-[680px] place-items-center p-6 text-center">
       <div>
         <Sparkles className="mx-auto mb-3 text-slate-400" />
-        <h1 className="text-xl font-semibold text-slate-950">Create a world to begin</h1>
-        <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
-          The prototype starts with a generated draft, then lets you advance a mock LLM turn with visible state changes.
-        </p>
+        <h1 className="text-xl font-semibold text-slate-950">{t("world.createStartTitle")}</h1>
+        <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">{t("world.createStartBody")}</p>
       </div>
     </div>
   );
