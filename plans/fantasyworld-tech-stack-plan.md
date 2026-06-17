@@ -202,6 +202,7 @@ FantasyWorld/
   - `main` 分支启用保护规则，只允许通过 PR + required checks 合并。
   - 公开仓库中不得提交真实密钥、生产配置或真实用户存档。
 - Render 使用 `render.yaml` 声明 Web Service、build/start 命令、数据库和环境变量占位。
+- 首次手动部署默认使用 Render Postgres `free` plan；后续数据量、备份、可用性或性能需要提升时再手动升级数据库 plan。
 - Render pre-deploy 执行 Drizzle migrations。
 - Render 连接 GitHub 仓库、填写生产环境变量和触发首次部署都由用户手动完成；项目实现侧只准备配置和提醒清单。
 - 用户完成 Render 连接后，`main` required checks 通过并合并会触发 Render 自动部署。

@@ -21,4 +21,4 @@ services:
         sync: false
 databases:
   - name: fantasyworld-db
-    plan: starter
+    plan: free
