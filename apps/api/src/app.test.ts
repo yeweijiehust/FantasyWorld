@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { createDatabaseStore } from "./db/client.js";
+import { LlmService } from "./llm/service.js";
+import type { LlmProvider } from "./llm/types.js";
 import { PrototypeStore } from "./store/prototype-store.js";
-import type { ModelConfig, Save } from "@fantasy-world/shared";
+import type { ModelConfig, ModelProbeResult, Save } from "@fantasy-world/shared";
 
 const { Pool } = pg;
 
@@ -176,6 +178,88 @@ describe("FantasyWorld API auth and model config safety", () => {
 
     expect(fetched.statusCode).toBe(200);
     expect(JSON.stringify(fetched.json())).not.toContain(apiKey);
+
+    await app.close();
+  });
+
+  it("probes mock models without a real API key", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const cookie = await login(app);
+
+    const probe = await app.inject({
+      method: "POST",
+      url: "/api/model-config/probe",
+      headers: {
+        cookie
+      },
+      payload: {
+        baseUrl: "https://models.example.test/v1",
+        model: "mock-model"
+      }
+    });
+
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json<ModelProbeResult>().ok).toBe(true);
+    expect(probe.json<ModelProbeResult>().provider).toBe("mock");
+
+    await app.close();
+  });
+
+  it("returns stable probe failures without saving a bad API key", async () => {
+    const store = new PrototypeStore();
+    const failingProvider: LlmProvider = {
+      probe(input): Promise<ModelProbeResult> {
+        const config: ModelProbeResult["config"] = {
+          baseUrl: input.baseUrl,
+          model: input.model,
+          hasApiKey: Boolean(input.apiKey),
+          supportsJsonMode: false,
+          supportsUsage: false,
+          supportsStream: false
+        };
+
+        if (input.apiKey) {
+          config.apiKeyTail = input.apiKey.slice(-4);
+        }
+
+        return Promise.resolve({
+          ok: false,
+          provider: "openai-compatible",
+          config,
+          latencyMs: 1,
+          error: {
+            code: "invalid_api_key",
+            message: "The model provider rejected the API key"
+          }
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, failingProvider)
+    });
+    const cookie = await login(app);
+    const apiKey = "test-secret-api-key-value";
+
+    const probe = await app.inject({
+      method: "POST",
+      url: "/api/model-config/probe",
+      headers: {
+        cookie
+      },
+      payload: {
+        baseUrl: "https://models.example.test/v1",
+        model: "bad-model",
+        apiKey
+      }
+    });
+
+    expect(probe.statusCode).toBe(200);
+    expect(probe.json<ModelProbeResult>().ok).toBe(false);
+    expect(probe.json<ModelProbeResult>().error?.code).toBe("invalid_api_key");
+    expect(JSON.stringify(probe.json())).not.toContain(apiKey);
+    expect(store.getModelConfig().hasApiKey).toBe(false);
 
     await app.close();
   });

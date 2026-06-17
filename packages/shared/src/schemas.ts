@@ -62,6 +62,29 @@ export const ModelConfigSchema = Type.Object({
 });
 export type ModelConfig = Static<typeof ModelConfigSchema>;
 
+export const ModelProbeInputSchema = Type.Partial(
+  Type.Object({
+    baseUrl: Type.String(),
+    model: Type.String(),
+    apiKey: Type.String()
+  })
+);
+export type ModelProbeInput = Static<typeof ModelProbeInputSchema>;
+
+export const ModelProbeResultSchema = Type.Object({
+  ok: Type.Boolean(),
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  config: ModelConfigSchema,
+  latencyMs: Type.Number({ minimum: 0 }),
+  error: Type.Optional(
+    Type.Object({
+      code: Type.String(),
+      message: Type.String()
+    })
+  )
+});
+export type ModelProbeResult = Static<typeof ModelProbeResultSchema>;
+
 export const SaveSettingsSchema = Type.Object({
   language: LanguageSchema,
   turnTimeScale: Type.String(),

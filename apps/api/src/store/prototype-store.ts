@@ -13,7 +13,7 @@ import type {
   Turn,
   TurnJob
 } from "@fantasy-world/shared";
-import type { FantasyWorldStore } from "./types.js";
+import type { FantasyWorldStore, ModelCredentials } from "./types.js";
 
 export const now = () => new Date().toISOString();
 export const id = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
@@ -35,6 +35,7 @@ export class PrototypeStore implements FantasyWorldStore {
   private readonly rollbackSnapshots = new Map<string, Save[]>();
   private readonly sessions = new Map<string, number>();
   private modelConfig: ModelConfig = defaultModelConfig;
+  private modelApiKey: string | undefined;
 
   getSession() {
     return { authenticated: true };
@@ -69,19 +70,33 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(this.modelConfig);
   }
 
+  getModelCredentials() {
+    const credentials: ModelCredentials = {
+      ...this.modelConfig
+    };
+
+    if (this.modelApiKey) {
+      credentials.apiKey = this.modelApiKey;
+    }
+
+    return structuredClone(credentials);
+  }
+
   updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }) {
     const { apiKey, ...modelInput } = input;
+    const cleanApiKey = apiKey?.trim();
     const next: ModelConfig = {
       ...this.modelConfig,
       ...modelInput,
-      hasApiKey: Boolean(apiKey) || this.modelConfig.hasApiKey,
-      supportsJsonMode: true,
-      supportsUsage: true,
-      supportsStream: false
+      hasApiKey: Boolean(cleanApiKey) || Boolean(this.modelApiKey) || this.modelConfig.hasApiKey,
+      supportsJsonMode: modelInput.supportsJsonMode ?? this.modelConfig.supportsJsonMode ?? true,
+      supportsUsage: modelInput.supportsUsage ?? this.modelConfig.supportsUsage ?? true,
+      supportsStream: modelInput.supportsStream ?? this.modelConfig.supportsStream ?? false
     };
 
-    if (apiKey) {
-      next.apiKeyTail = apiKey.slice(-4);
+    if (cleanApiKey) {
+      this.modelApiKey = cleanApiKey;
+      next.apiKeyTail = cleanApiKey.slice(-4);
     } else if (this.modelConfig.apiKeyTail) {
       next.apiKeyTail = this.modelConfig.apiKeyTail;
     }
