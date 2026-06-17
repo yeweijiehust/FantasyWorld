@@ -668,7 +668,7 @@ export class DatabaseStore implements FantasyWorldStore {
     await db.delete(dbSchema.characters).where(eq(dbSchema.characters.saveId, save.id));
     await db.delete(dbSchema.locations).where(eq(dbSchema.locations.saveId, save.id));
     await db.delete(dbSchema.relationships).where(eq(dbSchema.relationships.saveId, save.id));
-    await this.insertSaveEntities(db, save);
+    await this.insertWorldEntities(db, save);
   }
 
   private async updateSaveCore(db: Database | Transaction, save: Save) {
@@ -688,6 +688,23 @@ export class DatabaseStore implements FantasyWorldStore {
   }
 
   private async insertSaveEntities(db: Database | Transaction, save: Save) {
+    await this.insertWorldEntities(db, save);
+
+    if (save.turns.length > 0) {
+      await db.insert(dbSchema.turns).values(
+        save.turns.map((turn) => ({
+          id: turn.id,
+          saveId: save.id,
+          turnNumber: turn.turnNumber,
+          data: turn,
+          snapshot: buildSnapshotBeforeTurn(save, turn),
+          createdAt: new Date(turn.createdAt)
+        }))
+      );
+    }
+  }
+
+  private async insertWorldEntities(db: Database | Transaction, save: Save) {
     if (save.characters.length > 0) {
       await db.insert(dbSchema.characters).values(
         save.characters.map((character) => ({
@@ -714,19 +731,6 @@ export class DatabaseStore implements FantasyWorldStore {
           id: relationship.id,
           saveId: save.id,
           data: relationship
-        }))
-      );
-    }
-
-    if (save.turns.length > 0) {
-      await db.insert(dbSchema.turns).values(
-        save.turns.map((turn) => ({
-          id: turn.id,
-          saveId: save.id,
-          turnNumber: turn.turnNumber,
-          data: turn,
-          snapshot: buildSnapshotBeforeTurn(save, turn),
-          createdAt: new Date(turn.createdAt)
         }))
       );
     }
