@@ -78,11 +78,17 @@ type BuildAppOptions = {
   env: AppEnv;
   store?: FantasyWorldStore;
   llmService?: LlmService;
+  jobExecution?: "inline" | "background";
 };
 
 export function buildApp(options: BuildAppOptions) {
   const store = options.store ?? prototypeStore;
   const llmService = options.llmService ?? new LlmService(store);
+  const jobExecution = options.jobExecution ?? (options.env.nodeEnv === "production" ? "background" : "inline");
+  const worker = new AppJobWorker(store, llmService);
+  if (jobExecution === "background") {
+    void worker.recover();
+  }
   const logger =
     options.env.nodeEnv === "test"
       ? false
@@ -652,9 +658,19 @@ export function buildApp(options: BuildAppOptions) {
         const existing = await store.getGenerationJobByIdempotencyKey(request.body.idempotencyKey);
 
         if (existing) {
+          if (jobExecution === "background" && existing.status === "queued") {
+            worker.scheduleGeneration(existing.id);
+          }
           reply.code(201);
           return existing;
         }
+      }
+
+      if (jobExecution === "background") {
+        const job = await store.createQueuedGenerationJob(request.body);
+        worker.scheduleGeneration(job.id);
+        reply.code(201);
+        return job;
       }
 
       const generatedDraft = await generateWorldDraft(llmService, request.body);
@@ -755,6 +771,16 @@ export function buildApp(options: BuildAppOptions) {
         return sendError(reply, 404, "not_found", "Generation job input not found");
       }
 
+      if (jobExecution === "background") {
+        const job = await store.queueGenerationRetry(request.params.id);
+
+        if (job?.status === "queued") {
+          worker.scheduleGeneration(job.id);
+        }
+
+        return job ?? sendError(reply, 404, "not_found", "Generation job not found");
+      }
+
       const generatedDraft = await generateWorldDraft(llmService, input);
       const llmCall = toLlmCallSummary(generatedDraft);
 
@@ -813,6 +839,9 @@ export function buildApp(options: BuildAppOptions) {
         const existing = await store.getTurnJobByIdempotencyKey(request.params.id, request.body.idempotencyKey);
 
         if (existing) {
+          if (jobExecution === "background" && existing.status === "queued") {
+            worker.scheduleTurn(existing.id);
+          }
           reply.code(201);
           return existing;
         }
@@ -821,8 +850,23 @@ export function buildApp(options: BuildAppOptions) {
       const active = await store.getActiveTurnJob(request.params.id);
 
       if (active) {
+        if (jobExecution === "background" && active.status === "queued") {
+          worker.scheduleTurn(active.id);
+        }
         reply.code(201);
         return active;
+      }
+
+      if (jobExecution === "background") {
+        const job = await store.createQueuedTurnJob(request.params.id, request.body);
+
+        if (!job) {
+          return sendError(reply, 404, "not_found", "Save not found");
+        }
+
+        worker.scheduleTurn(job.id);
+        reply.code(201);
+        return job;
       }
 
       const orchestration = await generateTurnDraft(llmService, save, request.body);
@@ -951,6 +995,16 @@ export function buildApp(options: BuildAppOptions) {
         return sendError(reply, 404, "not_found", "Save not found");
       }
 
+      if (jobExecution === "background") {
+        const job = await store.queueTurnRetry(request.params.id);
+
+        if (job?.status === "queued") {
+          worker.scheduleTurn(job.id);
+        }
+
+        return job ?? sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
       const orchestration = await generateTurnDraft(llmService, save, current.input ?? {});
       const llmCall = toLlmCallSummary(orchestration);
 
@@ -1050,6 +1104,118 @@ type FailedLlmJobResult = {
   latencyMs: number;
 };
 
+class AppJobWorker {
+  private readonly generationJobs = new Set<string>();
+  private readonly turnJobs = new Set<string>();
+
+  constructor(
+    private readonly store: FantasyWorldStore,
+    private readonly llmService: LlmService
+  ) {}
+
+  async recover() {
+    const [generationJobs, turnJobs] = await Promise.all([
+      this.store.listActiveGenerationJobs(),
+      this.store.listActiveTurnJobs()
+    ]);
+
+    for (const job of generationJobs) {
+      if (job.status === "queued") {
+        this.scheduleGeneration(job.id);
+      } else if (job.status === "running") {
+        await this.store.failGenerationJob(job.id, interruptedJobFailure(job.phase ?? "running"));
+      }
+    }
+
+    for (const job of turnJobs) {
+      if (job.status === "queued") {
+        this.scheduleTurn(job.id);
+      } else if (job.status === "running") {
+        await this.store.failTurnJob(job.id, interruptedJobFailure(job.phase ?? "running"));
+      }
+    }
+  }
+
+  scheduleGeneration(jobId: string) {
+    if (this.generationJobs.has(jobId)) {
+      return;
+    }
+
+    this.generationJobs.add(jobId);
+    void this.runGeneration(jobId).finally(() => this.generationJobs.delete(jobId));
+  }
+
+  scheduleTurn(jobId: string) {
+    if (this.turnJobs.has(jobId)) {
+      return;
+    }
+
+    this.turnJobs.add(jobId);
+    void this.runTurn(jobId).finally(() => this.turnJobs.delete(jobId));
+  }
+
+  private async runGeneration(jobId: string) {
+    try {
+      const started = await this.store.startGenerationJob(jobId, "generating_world_draft");
+      const input = started?.input ?? started?.draft?.input;
+
+      if (!started || started.status !== "running" || !input) {
+        return;
+      }
+
+      const generatedDraft = await generateWorldDraft(this.llmService, input);
+      const llmCall = toLlmCallSummary(generatedDraft);
+
+      if (!generatedDraft.ok) {
+        await this.store.failGenerationJob(jobId, toJobFailure("generating_world_draft", generatedDraft), llmCall);
+        return;
+      }
+
+      await this.store.completeGenerationJob(jobId, generatedDraft.output, llmCall);
+    } catch (error) {
+      await this.store.failGenerationJob(jobId, exceptionJobFailure("generating_world_draft", error));
+    }
+  }
+
+  private async runTurn(jobId: string) {
+    try {
+      const started = await this.store.startTurnJob(jobId, "generating_turn_draft");
+
+      if (!started || started.status !== "running") {
+        return;
+      }
+
+      const save = await this.store.getSave(started.saveId);
+
+      if (!save) {
+        await this.store.failTurnJob(jobId, {
+          code: "save_not_found",
+          message: "Save not found while running queued turn job",
+          phase: "loading_save",
+          retryable: false,
+          createdAt: new Date().toISOString(),
+          provider: "mock"
+        });
+        return;
+      }
+
+      const orchestration = await generateTurnDraft(this.llmService, save, started.input ?? {});
+      const llmCall = toLlmCallSummary(orchestration);
+
+      if (!orchestration.ok) {
+        const failurePhase =
+          orchestration.error.code === "invalid_llm_reference" ? "validating_turn_references" : "generating_turn_draft";
+        await this.store.failTurnJob(jobId, toJobFailure(failurePhase, orchestration), llmCall);
+        return;
+      }
+
+      await this.store.completeTurnJob(jobId, orchestration.output, llmCall);
+    } catch (error) {
+      await this.store.failTurnJob(jobId, exceptionJobFailure("generating_turn_draft", error));
+    }
+  }
+}
+
 function generateWorldDraft(llmService: LlmService, input: CreateSaveInput) {
   return llmService.generateJson({
     schema: GeneratedWorldDraftSchema,
@@ -1127,6 +1293,30 @@ function toLlmCallSummary(result: LlmJsonResult<unknown>): LlmCallSummary {
     ...(result.outputTokenPriceUsdPerMillion !== undefined
       ? { outputTokenPriceUsdPerMillion: result.outputTokenPriceUsdPerMillion }
       : {})
+  };
+}
+
+function interruptedJobFailure(phase: string): JobFailure {
+  return {
+    code: "worker_interrupted",
+    message: "The worker stopped before this job completed",
+    phase,
+    retryable: true,
+    createdAt: new Date().toISOString(),
+    provider: "mock"
+  };
+}
+
+function exceptionJobFailure(phase: string, error: unknown): JobFailure {
+  const message = error instanceof Error ? error.message : "The worker failed while processing this job";
+
+  return {
+    code: "worker_error",
+    message,
+    phase,
+    retryable: true,
+    createdAt: new Date().toISOString(),
+    provider: "mock"
   };
 }
 

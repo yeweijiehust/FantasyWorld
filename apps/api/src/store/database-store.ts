@@ -275,6 +275,34 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
+  async createQueuedGenerationJob(input: CreateSaveInput): Promise<SaveGenerationJob> {
+    if (input.idempotencyKey) {
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const job: SaveGenerationJob = {
+      id: id("generation_job"),
+      status: "queued",
+      phase: "queued",
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input
+    };
+
+    await this.db.insert(dbSchema.saveGenerationJobs).values({
+      id: job.id,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
   async createGenerationJob(
     input: CreateSaveInput,
     generatedDraft?: GeneratedWorldDraft,
@@ -356,6 +384,71 @@ export class DatabaseStore implements FantasyWorldStore {
     });
 
     return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
+  }
+
+  async listActiveGenerationJobs(): Promise<SaveGenerationJob[]> {
+    const rows = await this.db.select().from(dbSchema.saveGenerationJobs);
+
+    return rows
+      .map((row) => row.data as SaveGenerationJob)
+      .filter((job) => isActiveJobStatus(job.status))
+      .map((job) => structuredClone(job));
+  }
+
+  async startGenerationJob(jobId: string, phase: string): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+
+    if (!job || job.status !== "queued") {
+      return job;
+    }
+
+    const running: SaveGenerationJob = {
+      ...job,
+      status: "running",
+      phase
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: running.status, data: running, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(running);
+  }
+
+  async completeGenerationJob(
+    jobId: string,
+    generatedDraft: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+    const input = job?.input ?? job?.draft?.input;
+
+    if (!job || !input || job.status === "cancelled" || job.status === "accepted") {
+      return undefined;
+    }
+
+    const completed: SaveGenerationJob = {
+      id: job.id,
+      status: "needs_review",
+      phase: "ready_for_review",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input,
+      ...(llmCall ? { llmCall } : {}),
+      draft: {
+        id: id("draft"),
+        input,
+        save: buildSave(input, generatedDraft),
+        createdAt: now()
+      }
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: completed.status, data: completed, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(completed);
   }
 
   async failGenerationJob(
@@ -448,6 +541,34 @@ export class DatabaseStore implements FantasyWorldStore {
       .where(eq(dbSchema.saveGenerationJobs.id, jobId));
 
     return structuredClone(retried);
+  }
+
+  async queueGenerationRetry(jobId: string): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+    const input = job?.input ?? job?.draft?.input;
+
+    if (!job || !input) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return job;
+    }
+
+    const queued: SaveGenerationJob = {
+      id: job.id,
+      status: "queued",
+      phase: "queued",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: queued.status, data: queued, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(queued);
   }
 
   async acceptGenerationJob(jobId: string): Promise<Save | undefined> {
@@ -782,6 +903,48 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
+  async createQueuedTurnJob(saveId: string, input: CreateTurnInput): Promise<TurnJob | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (input.idempotencyKey) {
+      const existing = await this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const active = await this.getActiveTurnJob(saveId);
+
+    if (active) {
+      return active;
+    }
+
+    const job: TurnJob = {
+      id: id("turn_job"),
+      saveId,
+      status: "queued",
+      phase: "queued",
+      input,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {})
+    };
+
+    await this.db.insert(dbSchema.turnJobs).values({
+      id: job.id,
+      saveId,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
   async createFailedTurnJob(
     saveId: string,
     input: CreateTurnInput,
@@ -830,6 +993,71 @@ export class DatabaseStore implements FantasyWorldStore {
     });
 
     return structuredClone(job);
+  }
+
+  async listActiveTurnJobs(): Promise<TurnJob[]> {
+    const rows = await this.db.select().from(dbSchema.turnJobs);
+
+    return rows
+      .map((row) => row.data as TurnJob)
+      .filter((job) => isActiveJobStatus(job.status))
+      .map((job) => structuredClone(job));
+  }
+
+  async startTurnJob(jobId: string, phase: string): Promise<TurnJob | undefined> {
+    const job = await this.getTurnJob(jobId);
+
+    if (!job || job.status !== "queued") {
+      return job;
+    }
+
+    const running: TurnJob = {
+      ...job,
+      status: "running",
+      phase
+    };
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: running.status, data: running, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(running);
+  }
+
+  async completeTurnJob(
+    jobId: string,
+    orchestration: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
+    const job = await this.getTurnJob(jobId);
+
+    if (!job || job.status === "cancelled" || job.status === "accepted") {
+      return undefined;
+    }
+
+    const save = await this.readSave(job.saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const { job: completed } = buildTurnDraft(
+      save,
+      job.input ?? {},
+      (await this.getModelCredentials({ saveId: job.saveId })).model,
+      job.id,
+      job.idempotencyKey,
+      orchestration,
+      llmCall
+    );
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: completed.status, data: completed, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(completed);
   }
 
   async failTurnJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): Promise<TurnJob | undefined> {
@@ -979,6 +1207,40 @@ export class DatabaseStore implements FantasyWorldStore {
     });
 
     return structuredClone(retried);
+  }
+
+  async queueTurnRetry(jobId: string): Promise<TurnJob | undefined> {
+    const job = await this.getTurnJob(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return job;
+    }
+
+    const queued: TurnJob = {
+      id: job.id,
+      saveId: job.saveId,
+      status: "queued",
+      phase: "queued",
+      input: job.input ?? {},
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {})
+    };
+
+    await this.db.transaction(async (tx) => {
+      if (job.turn) {
+        await tx.delete(dbSchema.turns).where(eq(dbSchema.turns.id, job.turn.id));
+      }
+
+      await tx
+        .update(dbSchema.turnJobs)
+        .set({ status: queued.status, data: queued, updatedAt: new Date() })
+        .where(eq(dbSchema.turnJobs.id, jobId));
+    });
+
+    return structuredClone(queued);
   }
 
   async acceptTurn(turnId: string): Promise<Save | undefined> {

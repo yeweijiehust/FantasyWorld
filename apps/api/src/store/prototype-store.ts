@@ -243,6 +243,27 @@ export class PrototypeStore implements FantasyWorldStore {
     return save ? structuredClone(save) : undefined;
   }
 
+  createQueuedGenerationJob(input: CreateSaveInput): SaveGenerationJob {
+    if (input.idempotencyKey) {
+      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const job: SaveGenerationJob = {
+      id: id("generation_job"),
+      status: "queued",
+      phase: "queued",
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input
+    };
+
+    this.generationJobs.set(job.id, job);
+    return structuredClone(job);
+  }
+
   createGenerationJob(
     input: CreateSaveInput,
     generatedDraft?: GeneratedWorldDraft,
@@ -308,6 +329,60 @@ export class PrototypeStore implements FantasyWorldStore {
   getGenerationJob(jobId: string): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
     return job ? structuredClone(job) : undefined;
+  }
+
+  listActiveGenerationJobs(): SaveGenerationJob[] {
+    return [...this.generationJobs.values()]
+      .filter((job) => isActiveJobStatus(job.status))
+      .map((job) => structuredClone(job));
+  }
+
+  startGenerationJob(jobId: string, phase: string): SaveGenerationJob | undefined {
+    const job = this.generationJobs.get(jobId);
+
+    if (!job || job.status !== "queued") {
+      return job ? structuredClone(job) : undefined;
+    }
+
+    const running: SaveGenerationJob = {
+      ...job,
+      status: "running",
+      phase
+    };
+
+    this.generationJobs.set(jobId, running);
+    return structuredClone(running);
+  }
+
+  completeGenerationJob(
+    jobId: string,
+    generatedDraft: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): SaveGenerationJob | undefined {
+    const job = this.generationJobs.get(jobId);
+    const input = job?.input ?? job?.draft?.input;
+
+    if (!job || !input || job.status === "cancelled" || job.status === "accepted") {
+      return undefined;
+    }
+
+    const completed: SaveGenerationJob = {
+      id: job.id,
+      status: "needs_review",
+      phase: "ready_for_review",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input,
+      ...(llmCall ? { llmCall } : {}),
+      draft: {
+        id: id("draft"),
+        input,
+        save: buildSave(input, generatedDraft),
+        createdAt: now()
+      }
+    };
+
+    this.generationJobs.set(jobId, completed);
+    return structuredClone(completed);
   }
 
   failGenerationJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): SaveGenerationJob | undefined {
@@ -384,6 +459,30 @@ export class PrototypeStore implements FantasyWorldStore {
 
     this.generationJobs.set(jobId, retried);
     return structuredClone(retried);
+  }
+
+  queueGenerationRetry(jobId: string): SaveGenerationJob | undefined {
+    const job = this.generationJobs.get(jobId);
+    const input = job?.input ?? job?.draft?.input;
+
+    if (!job || !input) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return structuredClone(job);
+    }
+
+    const queued: SaveGenerationJob = {
+      id: job.id,
+      status: "queued",
+      phase: "queued",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input
+    };
+
+    this.generationJobs.set(jobId, queued);
+    return structuredClone(queued);
   }
 
   acceptGenerationJob(jobId: string): Save | undefined {
@@ -706,6 +805,40 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
+  createQueuedTurnJob(saveId: string, input: CreateTurnInput): TurnJob | undefined {
+    const save = this.saves.get(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (input.idempotencyKey) {
+      const existing = this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const active = this.getActiveTurnJob(saveId);
+
+    if (active) {
+      return active;
+    }
+
+    const job: TurnJob = {
+      id: id("turn_job"),
+      saveId,
+      status: "queued",
+      phase: "queued",
+      input,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {})
+    };
+
+    this.turnJobs.set(job.id, job);
+    return structuredClone(job);
+  }
+
   createFailedTurnJob(
     saveId: string,
     input: CreateTurnInput,
@@ -758,6 +891,60 @@ export class PrototypeStore implements FantasyWorldStore {
   getActiveTurnJob(saveId: string): TurnJob | undefined {
     const job = [...this.turnJobs.values()].find((item) => item.saveId === saveId && isActiveJobStatus(item.status));
     return job ? structuredClone(job) : undefined;
+  }
+
+  listActiveTurnJobs(): TurnJob[] {
+    return [...this.turnJobs.values()]
+      .filter((job) => isActiveJobStatus(job.status))
+      .map((job) => structuredClone(job));
+  }
+
+  startTurnJob(jobId: string, phase: string): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job || job.status !== "queued") {
+      return job ? structuredClone(job) : undefined;
+    }
+
+    const running: TurnJob = {
+      ...job,
+      status: "running",
+      phase
+    };
+
+    this.turnJobs.set(jobId, running);
+    return structuredClone(running);
+  }
+
+  completeTurnJob(
+    jobId: string,
+    orchestration: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job || job.status === "cancelled" || job.status === "accepted") {
+      return undefined;
+    }
+
+    const save = this.saves.get(job.saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const { job: completed } = buildTurnDraft(
+      save,
+      job.input ?? {},
+      this.getModelCredentials({ saveId: job.saveId }).model,
+      job.id,
+      job.idempotencyKey,
+      orchestration,
+      llmCall
+    );
+
+    this.turnJobs.set(jobId, completed);
+    return structuredClone(completed);
   }
 
   failTurnJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): TurnJob | undefined {
@@ -856,6 +1043,30 @@ export class PrototypeStore implements FantasyWorldStore {
     this.turnJobs.set(jobId, retried);
 
     return structuredClone(retried);
+  }
+
+  queueTurnRetry(jobId: string): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return structuredClone(job);
+    }
+
+    const queued: TurnJob = {
+      id: job.id,
+      saveId: job.saveId,
+      status: "queued",
+      phase: "queued",
+      input: job.input ?? {},
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {})
+    };
+
+    this.turnJobs.set(jobId, queued);
+    return structuredClone(queued);
   }
 
   acceptTurn(turnId: string): Save | undefined {

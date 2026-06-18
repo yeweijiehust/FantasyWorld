@@ -8,7 +8,7 @@ import { createDatabaseStore } from "./db/client.js";
 import { MockLlmProvider } from "./llm/mock-provider.js";
 import { LlmService } from "./llm/service.js";
 import type { LlmProvider } from "./llm/types.js";
-import { buildGeneratedWorldDraft, PrototypeStore } from "./store/prototype-store.js";
+import { buildGeneratedWorldDraft, buildSave, PrototypeStore } from "./store/prototype-store.js";
 import { createTurnOrchestration } from "./turn/orchestrator.js";
 import type {
   ModelConfig,
@@ -96,6 +96,58 @@ async function createAcceptedSave(app: ReturnType<typeof buildApp>, cookie: stri
   expect(accepted.statusCode).toBe(200);
 
   return accepted.json<Save>();
+}
+
+async function waitForGenerationJob(
+  app: ReturnType<typeof buildApp>,
+  cookie: string | undefined,
+  jobId: string,
+  status: SaveGenerationJob["status"]
+) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/save-generation-jobs/${jobId}`,
+      headers: {
+        cookie
+      }
+    });
+    const job = response.json<SaveGenerationJob>();
+
+    if (job.status === status) {
+      return job;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Generation job ${jobId} did not reach ${status}`);
+}
+
+async function waitForTurnJob(
+  app: ReturnType<typeof buildApp>,
+  cookie: string | undefined,
+  jobId: string,
+  status: TurnJob["status"]
+) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/turn-jobs/${jobId}`,
+      headers: {
+        cookie
+      }
+    });
+    const job = response.json<TurnJob>();
+
+    if (job.status === status) {
+      return job;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Turn job ${jobId} did not reach ${status}`);
 }
 
 describe("environment validation", () => {
@@ -1124,6 +1176,7 @@ describe("FantasyWorld API prototype", () => {
       },
       payload
     });
+
     const competing = await app.inject({
       method: "POST",
       url: `/api/saves/${save.id}/turns`,
@@ -1419,6 +1472,188 @@ describe("FantasyWorld API prototype", () => {
     expect(acceptedSave.characters[0]?.privateMemory).toContain("LLM 回合记忆：灯塔信号被人为改写。");
     expect(acceptedSave.relationships[0]?.summary).toContain("LLM 回合");
     expect(acceptedSave.worldMemory.worldSummary).toContain("LLM 回合把灯塔异常信号加入世界局势");
+
+    await app.close();
+  });
+
+  it("runs save generation jobs through the background worker", async () => {
+    const store = new PrototypeStore();
+    store.updateModelConfig({
+      model: "worker-world-model",
+      apiKey: "test-secret-api-key-value"
+    });
+    let calls = 0;
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "worker-world-model",
+            hasApiKey: true
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson(_input, request) {
+        calls += 1;
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output: request.mockOutput,
+          latencyMs: 1
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider),
+      jobExecution: "background"
+    });
+    const cookie = await login(app);
+    const payload = {
+      templateId: "fantasy-frontier",
+      name: "Worker Harbor",
+      premise: "A harbor tests queued world generation.",
+      characterSeeds: ["Ada", "Bryn", "Cato"],
+      settings: {
+        language: "en" as const,
+        turnTimeScale: "One scene",
+        randomness: 20,
+        contentBoundary: "PG",
+        styleGuide: "Clear and direct"
+      },
+      idempotencyKey: "worker-world"
+    };
+
+    const queued = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+
+    expect(queued.statusCode).toBe(201);
+    expect(queued.json<SaveGenerationJob>().status).toBe("queued");
+    expect(duplicate.json<SaveGenerationJob>().id).toBe(queued.json<SaveGenerationJob>().id);
+
+    const completed = await waitForGenerationJob(app, cookie, queued.json<SaveGenerationJob>().id, "needs_review");
+    expect(completed.draft?.save.name).toBe("Worker Harbor");
+    expect(completed.llmCall?.status).toBe("succeeded");
+    expect(calls).toBe(1);
+
+    await app.close();
+  });
+
+  it("runs turn jobs through the background worker and keeps one active turn per save", async () => {
+    const store = new PrototypeStore();
+    const save = store.importSave(
+      buildSave({
+        templateId: "fantasy-frontier",
+        name: "Worker Turn Harbor",
+        premise: "A harbor tests queued turn generation.",
+        characterSeeds: ["Ada", "Bryn", "Cato"],
+        settings: {
+          language: "en",
+          turnTimeScale: "One scene",
+          randomness: 20,
+          contentBoundary: "PG",
+          styleGuide: "Clear and direct"
+        }
+      })
+    );
+    store.updateModelConfig({
+      model: "worker-turn-model",
+      apiKey: "test-secret-api-key-value"
+    });
+    let releaseGeneration!: (value: Awaited<ReturnType<LlmProvider["generateJson"]>>) => void;
+    const pendingGeneration = new Promise<Awaited<ReturnType<LlmProvider["generateJson"]>>>((resolve) => {
+      releaseGeneration = resolve;
+    });
+    let calls = 0;
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "worker-turn-model",
+            hasApiKey: true
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson(_input, request) {
+        calls += 1;
+        return pendingGeneration.then(() => ({
+          ok: true,
+          provider: "openai-compatible",
+          output: request.mockOutput,
+          latencyMs: 1
+        }));
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider),
+      jobExecution: "background"
+    });
+    const cookie = await login(app);
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "Advance in the worker",
+        idempotencyKey: "worker-turn-first"
+      }
+    });
+    const running = await waitForTurnJob(app, cookie, first.json<TurnJob>().id, "running");
+    const competing = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "This should reuse the active job",
+        idempotencyKey: "worker-turn-second"
+      }
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(first.json<TurnJob>().status).toBe("queued");
+    expect(running.status).toBe("running");
+    expect(competing.json<TurnJob>().id).toBe(first.json<TurnJob>().id);
+    expect(calls).toBe(1);
+
+    releaseGeneration({
+      ok: true,
+      provider: "openai-compatible",
+      output: createTurnOrchestration(save, { gmInstruction: "Advance in the worker" }),
+      latencyMs: 1
+    });
+
+    const completed = await waitForTurnJob(app, cookie, first.json<TurnJob>().id, "needs_review");
+    expect(completed.turn?.callSummary.provider).toBe("openai-compatible");
+    expect(completed.turn?.callSummary.calls).toBe(1);
 
     await app.close();
   });
