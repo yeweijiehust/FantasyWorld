@@ -4,8 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
-    startCommand: pnpm --filter @fantasy-world/api start
-    preDeployCommand: pnpm db:migrate
+    startCommand: pnpm db:migrate && pnpm --filter @fantasy-world/api start
     envVars:
       - key: NODE_ENV
         value: production

@@ -204,7 +204,8 @@ FantasyWorld/
 - Render 使用 `render.yaml` 声明 Web Service、build/start 命令、数据库和环境变量占位。
 - 首次手动部署默认使用 Render Web Service `free` plan 和 Render Postgres `free`
   plan；后续数据量、备份、可用性或性能需要提升时再手动升级对应 plan。
-- Render pre-deploy 执行 Drizzle migrations。
+- Render free Web Service 不支持 `preDeployCommand`；首版把 `pnpm db:migrate` 串进
+  `startCommand`，再启动 API。升级到支持 pre-deploy 的层级后，可以再把迁移移回部署前命令。
 - Render 连接 GitHub 仓库、填写生产环境变量和触发首次部署都由用户手动完成；项目实现侧只准备配置和提醒清单。
 - 用户完成 Render 连接后，`main` required checks 通过并合并会触发 Render 自动部署。
 - GitHub Actions 不直接调用 Render API，不在 GitHub Secrets 中保存 Render 部署密钥。
