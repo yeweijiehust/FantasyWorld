@@ -9,6 +9,7 @@ import type {
   GeneratedWorldDraft,
   JobFailure,
   Location,
+  LlmCallSummary,
   LocationPatch,
   ModelConfig,
   ModelConfigUpdate,
@@ -242,7 +243,11 @@ export class PrototypeStore implements FantasyWorldStore {
     return save ? structuredClone(save) : undefined;
   }
 
-  createGenerationJob(input: CreateSaveInput, generatedDraft?: GeneratedWorldDraft): SaveGenerationJob {
+  createGenerationJob(
+    input: CreateSaveInput,
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): SaveGenerationJob {
     if (input.idempotencyKey) {
       const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
 
@@ -258,6 +263,7 @@ export class PrototypeStore implements FantasyWorldStore {
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       input,
+      ...(llmCall ? { llmCall } : {}),
       draft: {
         id: id("draft"),
         input,
@@ -270,7 +276,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  createFailedGenerationJob(input: CreateSaveInput, failure: JobFailure): SaveGenerationJob {
+  createFailedGenerationJob(input: CreateSaveInput, failure: JobFailure, llmCall?: LlmCallSummary): SaveGenerationJob {
     if (input.idempotencyKey) {
       const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
 
@@ -285,6 +291,7 @@ export class PrototypeStore implements FantasyWorldStore {
       phase: failure.phase,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       input,
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -303,7 +310,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return job ? structuredClone(job) : undefined;
   }
 
-  failGenerationJob(jobId: string, failure: JobFailure): SaveGenerationJob | undefined {
+  failGenerationJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
 
     if (!job) {
@@ -314,6 +321,7 @@ export class PrototypeStore implements FantasyWorldStore {
       ...job,
       status: "failed",
       phase: failure.phase,
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -343,7 +351,11 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  retryGenerationJob(jobId: string, generatedDraft?: GeneratedWorldDraft): SaveGenerationJob | undefined {
+  retryGenerationJob(
+    jobId: string,
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
     const input = job?.input ?? job?.draft?.input;
 
@@ -361,6 +373,7 @@ export class PrototypeStore implements FantasyWorldStore {
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
       input,
+      ...(llmCall ? { llmCall } : {}),
       draft: {
         id: id("draft"),
         input,
@@ -653,7 +666,12 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(updated);
   }
 
-  createTurnJob(saveId: string, input: CreateTurnInput, orchestration?: TurnOrchestrationOutput): TurnJob | undefined {
+  createTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): TurnJob | undefined {
     const save = this.saves.get(saveId);
 
     if (!save) {
@@ -680,14 +698,20 @@ export class PrototypeStore implements FantasyWorldStore {
       this.getModelCredentials({ saveId }).model,
       undefined,
       undefined,
-      orchestration
+      orchestration,
+      llmCall
     );
     this.turnJobs.set(job.id, job);
 
     return structuredClone(job);
   }
 
-  createFailedTurnJob(saveId: string, input: CreateTurnInput, failure: JobFailure): TurnJob | undefined {
+  createFailedTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): TurnJob | undefined {
     const save = this.saves.get(saveId);
 
     if (!save) {
@@ -715,6 +739,7 @@ export class PrototypeStore implements FantasyWorldStore {
       phase: failure.phase,
       input,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -735,7 +760,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return job ? structuredClone(job) : undefined;
   }
 
-  failTurnJob(jobId: string, failure: JobFailure): TurnJob | undefined {
+  failTurnJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): TurnJob | undefined {
     const job = this.turnJobs.get(jobId);
 
     if (!job) {
@@ -746,6 +771,7 @@ export class PrototypeStore implements FantasyWorldStore {
       ...job,
       status: "failed",
       phase: failure.phase,
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -800,7 +826,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  retryTurnJob(jobId: string, orchestration?: TurnOrchestrationOutput): TurnJob | undefined {
+  retryTurnJob(jobId: string, orchestration?: TurnOrchestrationOutput, llmCall?: LlmCallSummary): TurnJob | undefined {
     const job = this.turnJobs.get(jobId);
 
     if (!job) {
@@ -823,7 +849,8 @@ export class PrototypeStore implements FantasyWorldStore {
       this.getModelCredentials({ saveId: job.saveId }).model,
       job.id,
       job.idempotencyKey,
-      orchestration
+      orchestration,
+      llmCall
     );
 
     this.turnJobs.set(jobId, retried);
@@ -1109,7 +1136,8 @@ export function buildTurnDraft(
   model: string,
   jobId = id("turn_job"),
   idempotencyKey = input.idempotencyKey,
-  orchestration = createTurnOrchestration(save, input)
+  orchestration = createTurnOrchestration(save, input),
+  llmCall?: LlmCallSummary
 ) {
   const turnNumber = save.turnNumber + 1;
   const event =
@@ -1138,9 +1166,26 @@ export function buildTurnDraft(
     stateChanges: orchestration.stateChanges.map((change) => ({ ...change, id: id("change") })),
     callSummary: {
       model,
-      calls: 1 + orchestration.characterPlans.length,
-      durationMs: 320 + orchestration.characterPlans.length * 90,
-      estimatedTokens: 900 + orchestration.characterPlans.length * 180
+      calls: llmCall ? 1 : 1 + orchestration.characterPlans.length,
+      durationMs: llmCall?.latencyMs ?? 320 + orchestration.characterPlans.length * 90,
+      estimatedTokens: llmCall?.estimatedTokens ?? 900 + orchestration.characterPlans.length * 180,
+      ...(llmCall
+        ? {
+            provider: llmCall.provider,
+            status: llmCall.status,
+            ...(llmCall.inputTokens !== undefined ? { inputTokens: llmCall.inputTokens } : {}),
+            ...(llmCall.outputTokens !== undefined ? { outputTokens: llmCall.outputTokens } : {}),
+            ...(llmCall.totalTokens !== undefined ? { totalTokens: llmCall.totalTokens } : {}),
+            ...(llmCall.estimatedUsage !== undefined ? { estimatedUsage: llmCall.estimatedUsage } : {}),
+            ...(llmCall.estimatedCostUsd !== undefined ? { estimatedCostUsd: llmCall.estimatedCostUsd } : {}),
+            ...(llmCall.inputTokenPriceUsdPerMillion !== undefined
+              ? { inputTokenPriceUsdPerMillion: llmCall.inputTokenPriceUsdPerMillion }
+              : {}),
+            ...(llmCall.outputTokenPriceUsdPerMillion !== undefined
+              ? { outputTokenPriceUsdPerMillion: llmCall.outputTokenPriceUsdPerMillion }
+              : {})
+          }
+        : {})
     },
     createdAt: now()
   };
@@ -1224,6 +1269,7 @@ export function buildTurnDraft(
     phase: "ready_for_review",
     input,
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(llmCall ? { llmCall } : {}),
     turn,
     draftState
   };

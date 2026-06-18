@@ -8,6 +8,8 @@ type SettingsForm = {
   baseUrl: string;
   model: string;
   apiKey: string;
+  inputTokenPriceUsdPerMillion: string;
+  outputTokenPriceUsdPerMillion: string;
 };
 
 export function SettingsPage() {
@@ -18,19 +20,28 @@ export function SettingsPage() {
     values: {
       baseUrl: config.data?.baseUrl ?? "https://api.openai.com/v1",
       model: config.data?.model ?? "gpt-4.1-mini",
-      apiKey: ""
+      apiKey: "",
+      inputTokenPriceUsdPerMillion: config.data?.inputTokenPriceUsdPerMillion?.toString() ?? "",
+      outputTokenPriceUsdPerMillion: config.data?.outputTokenPriceUsdPerMillion?.toString() ?? ""
     }
   });
   const update = useMutation({
     mutationFn: async (values: SettingsForm) => {
-      const probe = await api.probeModelConfig(values);
+      const probe = await api.probeModelConfig({
+        baseUrl: values.baseUrl,
+        model: values.model,
+        apiKey: values.apiKey
+      });
 
       if (!probe.ok) {
         throw new Error(probe.error?.message ?? t("settings.connectionFailed"));
       }
 
       const saved = await api.updateModelConfig({
-        ...values,
+        baseUrl: values.baseUrl,
+        model: values.model,
+        apiKey: values.apiKey,
+        ...pricePayload(values),
         supportsJsonMode: Boolean(probe.config.supportsJsonMode),
         supportsUsage: Boolean(probe.config.supportsUsage),
         supportsStream: Boolean(probe.config.supportsStream)
@@ -42,7 +53,9 @@ export function SettingsPage() {
       reset({
         apiKey: "",
         baseUrl: result.saved.baseUrl,
-        model: result.saved.model
+        model: result.saved.model,
+        inputTokenPriceUsdPerMillion: result.saved.inputTokenPriceUsdPerMillion?.toString() ?? "",
+        outputTokenPriceUsdPerMillion: result.saved.outputTokenPriceUsdPerMillion?.toString() ?? ""
       });
       await queryClient.invalidateQueries({ queryKey: ["model-config"] });
     }
@@ -73,6 +86,28 @@ export function SettingsPage() {
           {t("settings.apiKey")}
           <input className="h-10 rounded-md border border-slate-300 px-3" type="password" {...register("apiKey")} />
         </label>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            {t("settings.inputTokenPrice")}
+            <input
+              className="h-10 rounded-md border border-slate-300 px-3"
+              min={0}
+              step="0.000001"
+              type="number"
+              {...register("inputTokenPriceUsdPerMillion")}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700">
+            {t("settings.outputTokenPrice")}
+            <input
+              className="h-10 rounded-md border border-slate-300 px-3"
+              min={0}
+              step="0.000001"
+              type="number"
+              {...register("outputTokenPriceUsdPerMillion")}
+            />
+          </label>
+        </div>
         <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
           {t("settings.currentKey")}:{" "}
           {config.data?.hasApiKey
@@ -101,4 +136,25 @@ export function SettingsPage() {
       </form>
     </div>
   );
+}
+
+function pricePayload(values: SettingsForm) {
+  const inputPrice = parseOptionalPrice(values.inputTokenPriceUsdPerMillion);
+  const outputPrice = parseOptionalPrice(values.outputTokenPriceUsdPerMillion);
+
+  return {
+    ...(inputPrice !== undefined ? { inputTokenPriceUsdPerMillion: inputPrice } : {}),
+    ...(outputPrice !== undefined ? { outputTokenPriceUsdPerMillion: outputPrice } : {})
+  };
+}
+
+function parseOptionalPrice(value: string) {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }

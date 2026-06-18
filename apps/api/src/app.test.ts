@@ -615,7 +615,9 @@ describe("FantasyWorld API prototype", () => {
     const store = new PrototypeStore();
     store.updateModelConfig({
       model: "story-model",
-      apiKey: "test-secret-api-key-value"
+      apiKey: "test-secret-api-key-value",
+      inputTokenPriceUsdPerMillion: 2,
+      outputTokenPriceUsdPerMillion: 8
     });
     let calls = 0;
     let userPrompt = "";
@@ -755,6 +757,17 @@ describe("FantasyWorld API prototype", () => {
     expect(job.draft?.save.locations[0]?.name).toBe("Clockwork Harbor");
     expect(job.draft?.save.characters.map((character) => character.name)).toEqual(["Ada", "Bryn", "Cato"]);
     expect(job.draft?.save.relationships[0]?.label).toBe("Uneasy allies");
+    expect(job.llmCall).toMatchObject({
+      provider: "openai-compatible",
+      model: "story-model",
+      status: "succeeded",
+      inputTokens: 100,
+      outputTokens: 300,
+      totalTokens: 400,
+      estimatedTokens: 400,
+      latencyMs: 1,
+      estimatedCostUsd: 0.0026
+    });
     expect(JSON.stringify(job)).not.toContain("test-secret-api-key-value");
 
     await app.close();
@@ -1312,7 +1325,9 @@ describe("FantasyWorld API prototype", () => {
     const save = sourceSave;
     store.updateModelConfig({
       model: "turn-model",
-      apiKey: "test-secret-api-key-value"
+      apiKey: "test-secret-api-key-value",
+      inputTokenPriceUsdPerMillion: 2,
+      outputTokenPriceUsdPerMillion: 4
     });
     const payload = {
       gmInstruction: "让灯塔发出异常信号",
@@ -1350,6 +1365,27 @@ describe("FantasyWorld API prototype", () => {
     expect(job.turn?.events[0]?.title).toBe("LLM 推演的灯塔异动");
     expect(job.turn?.events[0]?.body).toContain("真实模型分支");
     expect(job.turn?.events[0]?.dialogue?.[0]?.line).toContain("雾灯");
+    expect(job.llmCall).toMatchObject({
+      provider: "openai-compatible",
+      model: "turn-model",
+      status: "succeeded",
+      inputTokens: 210,
+      outputTokens: 260,
+      totalTokens: 470,
+      estimatedTokens: 470,
+      latencyMs: 2,
+      estimatedCostUsd: 0.00146
+    });
+    expect(job.turn?.callSummary).toMatchObject({
+      provider: "openai-compatible",
+      status: "succeeded",
+      inputTokens: 210,
+      outputTokens: 260,
+      totalTokens: 470,
+      estimatedTokens: 470,
+      durationMs: 2,
+      estimatedCostUsd: 0.00146
+    });
     expect(job.draftState?.characterUpdates[0]?.privateMemory).toContain("LLM 回合记忆：灯塔信号被人为改写。");
     expect(job.draftState?.relationshipUpdates[0]?.summary).toContain("LLM 回合");
     expect(JSON.stringify(job)).not.toContain("test-secret-api-key-value");
@@ -1715,7 +1751,11 @@ describe("FantasyWorld API prototype", () => {
     expect(
       firstTurn?.stateChanges.some((change) => change.targetType === "relationship" && change.field === "strength")
     ).toBe(true);
-    expect(firstTurn?.callSummary.calls).toBeGreaterThan(1);
+    expect(firstTurn?.callSummary.calls).toBe(1);
+    expect(firstTurn?.callSummary.provider).toBe("mock");
+    expect(firstTurn?.callSummary.estimatedUsage).toBe(true);
+    expect(firstTurn?.callSummary.inputTokens).toBeGreaterThan(0);
+    expect(firstTurn?.callSummary.outputTokens).toBeGreaterThan(0);
 
     const saveAfterFirst = await app.inject({
       method: "GET",

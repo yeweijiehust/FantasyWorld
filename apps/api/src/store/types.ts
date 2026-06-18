@@ -7,6 +7,7 @@ import type {
   CreateTurnInput,
   GeneratedWorldDraft,
   JobFailure,
+  LlmCallSummary,
   LocationPatch,
   ModelConfig,
   ModelConfigUpdate,
@@ -26,7 +27,16 @@ export type ModelCredentials = ModelConfig & {
 export type ModelCredentialsScope = {
   saveId?: string;
   modelOverride?: Partial<
-    Pick<ModelConfig, "baseUrl" | "model" | "supportsJsonMode" | "supportsUsage" | "supportsStream">
+    Pick<
+      ModelConfig,
+      | "baseUrl"
+      | "model"
+      | "supportsJsonMode"
+      | "supportsUsage"
+      | "supportsStream"
+      | "inputTokenPriceUsdPerMillion"
+      | "outputTokenPriceUsdPerMillion"
+    >
   >;
 };
 
@@ -44,11 +54,13 @@ export type FantasyWorldStore = {
   getSave(saveId: string): Save | undefined | Promise<Save | undefined>;
   createGenerationJob(
     input: CreateSaveInput,
-    generatedDraft?: GeneratedWorldDraft
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
   ): SaveGenerationJob | Promise<SaveGenerationJob>;
   createFailedGenerationJob(
     input: CreateSaveInput,
-    failure: JobFailure
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
   ): SaveGenerationJob | Promise<SaveGenerationJob>;
   getGenerationJobByIdempotencyKey(
     idempotencyKey: string
@@ -56,12 +68,14 @@ export type FantasyWorldStore = {
   getGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   failGenerationJob(
     jobId: string,
-    failure: JobFailure
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
   ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   cancelGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   retryGenerationJob(
     jobId: string,
-    generatedDraft?: GeneratedWorldDraft
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
   ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   acceptGenerationJob(jobId: string): Save | undefined | Promise<Save | undefined>;
   importSave(input: Save): Save | Promise<Save>;
@@ -89,24 +103,31 @@ export type FantasyWorldStore = {
   createTurnJob(
     saveId: string,
     input: CreateTurnInput,
-    orchestration?: TurnOrchestrationOutput
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   createFailedTurnJob(
     saveId: string,
     input: CreateTurnInput,
-    failure: JobFailure
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   getTurnJobByIdempotencyKey(
     saveId: string,
     idempotencyKey: string
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   getActiveTurnJob(saveId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
-  failTurnJob(jobId: string, failure: JobFailure): TurnJob | undefined | Promise<TurnJob | undefined>;
+  failTurnJob(
+    jobId: string,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): TurnJob | undefined | Promise<TurnJob | undefined>;
   patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined | Promise<TurnJob | undefined>;
   cancelTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   retryTurnJob(
     jobId: string,
-    orchestration?: TurnOrchestrationOutput
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   acceptTurn(turnId: string): Save | undefined | Promise<Save | undefined>;
   rollbackSave(saveId: string): Save | undefined | Promise<Save | undefined>;

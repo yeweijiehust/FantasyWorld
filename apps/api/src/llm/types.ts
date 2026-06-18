@@ -15,6 +15,7 @@ export type LlmJsonUsage = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  estimated?: boolean;
 };
 
 export type LlmJsonError = {
@@ -51,6 +52,7 @@ export type LlmProviderJsonResult =
       ok: false;
       provider: "mock" | "openai-compatible";
       rawOutput?: string;
+      usage?: LlmJsonUsage;
       error: LlmJsonError;
       latencyMs: number;
     };
@@ -59,15 +61,24 @@ export type LlmJsonResult<T> =
   | {
       ok: true;
       provider: "mock" | "openai-compatible";
+      model: string;
       output: T;
       rawOutput?: string;
       usage?: LlmJsonUsage;
+      estimatedCostUsd?: number;
+      inputTokenPriceUsdPerMillion?: number;
+      outputTokenPriceUsdPerMillion?: number;
       latencyMs: number;
     }
   | {
       ok: false;
       provider: "mock" | "openai-compatible";
+      model: string;
       rawOutput?: string;
+      usage?: LlmJsonUsage;
+      estimatedCostUsd?: number;
+      inputTokenPriceUsdPerMillion?: number;
+      outputTokenPriceUsdPerMillion?: number;
       error: LlmJsonError;
       latencyMs: number;
     };

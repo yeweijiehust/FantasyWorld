@@ -121,12 +121,14 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         temperature: request.temperature ?? 0.4
       });
       const rawOutput = response.choices[0]?.message?.content ?? "";
+      const usage = normalizeUsage(response.usage);
 
       if (!rawOutput.trim()) {
         return {
           ok: false,
           provider: "openai-compatible",
           rawOutput,
+          ...(usage ? { usage } : {}),
           latencyMs: Math.round(performance.now() - startedAt),
           error: {
             code: "empty_response",
@@ -136,8 +138,6 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       }
 
       try {
-        const usage = normalizeUsage(response.usage);
-
         return {
           ok: true,
           provider: "openai-compatible",
@@ -151,6 +151,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
           ok: false,
           provider: "openai-compatible",
           rawOutput,
+          ...(usage ? { usage } : {}),
           latencyMs: Math.round(performance.now() - startedAt),
           error: {
             code: "invalid_json",

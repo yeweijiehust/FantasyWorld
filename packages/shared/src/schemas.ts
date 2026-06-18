@@ -99,7 +99,9 @@ export const ModelConfigSchema = Type.Object({
   apiKeyTail: Type.Optional(Type.String()),
   supportsJsonMode: Type.Optional(Type.Boolean()),
   supportsUsage: Type.Optional(Type.Boolean()),
-  supportsStream: Type.Optional(Type.Boolean())
+  supportsStream: Type.Optional(Type.Boolean()),
+  inputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 })),
+  outputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 }))
 });
 export type ModelConfig = Static<typeof ModelConfigSchema>;
 
@@ -110,10 +112,28 @@ export const ModelConfigUpdateSchema = Type.Partial(
     apiKey: Type.String(),
     supportsJsonMode: Type.Boolean(),
     supportsUsage: Type.Boolean(),
-    supportsStream: Type.Boolean()
+    supportsStream: Type.Boolean(),
+    inputTokenPriceUsdPerMillion: Type.Number({ minimum: 0 }),
+    outputTokenPriceUsdPerMillion: Type.Number({ minimum: 0 })
   })
 );
 export type ModelConfigUpdate = Static<typeof ModelConfigUpdateSchema>;
+
+export const LlmCallSummarySchema = Type.Object({
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  model: Type.String(),
+  status: Type.Union([Type.Literal("succeeded"), Type.Literal("failed")]),
+  latencyMs: Type.Number({ minimum: 0 }),
+  estimatedTokens: Type.Number({ minimum: 0 }),
+  inputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  outputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  totalTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  estimatedUsage: Type.Optional(Type.Boolean()),
+  estimatedCostUsd: Type.Optional(Type.Number({ minimum: 0 })),
+  inputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 })),
+  outputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 }))
+});
+export type LlmCallSummary = Static<typeof LlmCallSummarySchema>;
 
 export const ModelProbeInputSchema = Type.Partial(
   Type.Object({
@@ -264,7 +284,16 @@ export const TurnSchema = Type.Object({
     model: Type.String(),
     calls: Type.Number({ minimum: 0 }),
     durationMs: Type.Number({ minimum: 0 }),
-    estimatedTokens: Type.Number({ minimum: 0 })
+    estimatedTokens: Type.Number({ minimum: 0 }),
+    provider: Type.Optional(Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")])),
+    status: Type.Optional(Type.Union([Type.Literal("succeeded"), Type.Literal("failed")])),
+    inputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+    outputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+    totalTokens: Type.Optional(Type.Number({ minimum: 0 })),
+    estimatedUsage: Type.Optional(Type.Boolean()),
+    estimatedCostUsd: Type.Optional(Type.Number({ minimum: 0 })),
+    inputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 })),
+    outputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 }))
   }),
   createdAt: Type.String()
 });
@@ -388,6 +417,7 @@ export const SaveGenerationJobSchema = Type.Object({
   idempotencyKey: Type.Optional(Type.String()),
   input: Type.Optional(CreateSaveInputSchema),
   draft: Type.Optional(SaveGenerationDraftSchema),
+  llmCall: Type.Optional(LlmCallSummarySchema),
   error: Type.Optional(Type.String()),
   failure: Type.Optional(JobFailureSchema)
 });
@@ -447,6 +477,7 @@ export const TurnJobSchema = Type.Object({
   input: Type.Optional(CreateTurnInputSchema),
   turn: Type.Optional(TurnSchema),
   draftState: Type.Optional(TurnDraftStateSchema),
+  llmCall: Type.Optional(LlmCallSummarySchema),
   error: Type.Optional(Type.String()),
   failure: Type.Optional(JobFailureSchema)
 });

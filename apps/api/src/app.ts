@@ -19,6 +19,7 @@ import {
   CreateTurnInputSchema,
   GeneratedWorldDraftSchema,
   type JobFailure,
+  type LlmCallSummary,
   LocationPatchSchema,
   ModelConfigSchema,
   ModelConfigUpdateSchema,
@@ -42,6 +43,7 @@ import { verifyPassword } from "./auth/password.js";
 import type { AppEnv } from "./config/env.js";
 import { createSaveExport, normalizeSaveImport } from "./import-export.js";
 import { LlmService } from "./llm/service.js";
+import type { LlmJsonResult, LlmJsonUsage } from "./llm/types.js";
 import {
   buildTurnGenerationSystemPrompt,
   buildTurnGenerationUserPrompt,
@@ -656,17 +658,19 @@ export function buildApp(options: BuildAppOptions) {
       }
 
       const generatedDraft = await generateWorldDraft(llmService, request.body);
+      const llmCall = toLlmCallSummary(generatedDraft);
 
       if (!generatedDraft.ok) {
         reply.code(201);
         return await store.createFailedGenerationJob(
           request.body,
-          toJobFailure("generating_world_draft", generatedDraft)
+          toJobFailure("generating_world_draft", generatedDraft),
+          llmCall
         );
       }
 
       reply.code(201);
-      return await store.createGenerationJob(request.body, generatedDraft.output);
+      return await store.createGenerationJob(request.body, generatedDraft.output, llmCall);
     }
   );
 
@@ -752,16 +756,18 @@ export function buildApp(options: BuildAppOptions) {
       }
 
       const generatedDraft = await generateWorldDraft(llmService, input);
+      const llmCall = toLlmCallSummary(generatedDraft);
 
       if (!generatedDraft.ok) {
         const job = await store.failGenerationJob(
           request.params.id,
-          toJobFailure("generating_world_draft", generatedDraft)
+          toJobFailure("generating_world_draft", generatedDraft),
+          llmCall
         );
         return job ?? sendError(reply, 404, "not_found", "Generation job not found");
       }
 
-      const job = await store.retryGenerationJob(request.params.id, generatedDraft.output);
+      const job = await store.retryGenerationJob(request.params.id, generatedDraft.output, llmCall);
       return job ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
   );
@@ -820,6 +826,7 @@ export function buildApp(options: BuildAppOptions) {
       }
 
       const orchestration = await generateTurnDraft(llmService, save, request.body);
+      const llmCall = toLlmCallSummary(orchestration);
 
       if (!orchestration.ok) {
         const failurePhase =
@@ -827,13 +834,14 @@ export function buildApp(options: BuildAppOptions) {
         const job = await store.createFailedTurnJob(
           request.params.id,
           request.body,
-          toJobFailure(failurePhase, orchestration)
+          toJobFailure(failurePhase, orchestration),
+          llmCall
         );
         reply.code(201);
         return job ?? sendError(reply, 404, "not_found", "Save not found");
       }
 
-      const job = await store.createTurnJob(request.params.id, request.body, orchestration.output);
+      const job = await store.createTurnJob(request.params.id, request.body, orchestration.output, llmCall);
 
       if (!job) {
         return sendError(reply, 404, "not_found", "Save not found");
@@ -944,15 +952,16 @@ export function buildApp(options: BuildAppOptions) {
       }
 
       const orchestration = await generateTurnDraft(llmService, save, current.input ?? {});
+      const llmCall = toLlmCallSummary(orchestration);
 
       if (!orchestration.ok) {
         const failurePhase =
           orchestration.error.code === "invalid_llm_reference" ? "validating_turn_references" : "generating_turn_draft";
-        const job = await store.failTurnJob(request.params.id, toJobFailure(failurePhase, orchestration));
+        const job = await store.failTurnJob(request.params.id, toJobFailure(failurePhase, orchestration), llmCall);
         return job ?? sendError(reply, 404, "not_found", "Turn job not found");
       }
 
-      const job = await store.retryTurnJob(request.params.id, orchestration.output);
+      const job = await store.retryTurnJob(request.params.id, orchestration.output, llmCall);
       return job ?? sendError(reply, 404, "not_found", "Turn job not found");
     }
   );
@@ -1027,12 +1036,18 @@ type SseReply = {
 
 type FailedLlmJobResult = {
   ok: false;
-  provider: string;
+  provider: "mock" | "openai-compatible";
+  model: string;
   rawOutput?: string;
+  usage?: LlmJsonUsage;
+  estimatedCostUsd?: number;
+  inputTokenPriceUsdPerMillion?: number;
+  outputTokenPriceUsdPerMillion?: number;
   error: {
     code: string;
     message: string;
   };
+  latencyMs: number;
 };
 
 function generateWorldDraft(llmService: LlmService, input: CreateSaveInput) {
@@ -1070,7 +1085,16 @@ async function generateTurnDraft(llmService: LlmService, save: Save, input: Crea
     return {
       ok: false,
       provider: orchestration.provider,
+      model: orchestration.model,
       ...(orchestration.rawOutput ? { rawOutput: orchestration.rawOutput } : {}),
+      ...(orchestration.usage ? { usage: orchestration.usage } : {}),
+      ...(orchestration.estimatedCostUsd !== undefined ? { estimatedCostUsd: orchestration.estimatedCostUsd } : {}),
+      ...(orchestration.inputTokenPriceUsdPerMillion !== undefined
+        ? { inputTokenPriceUsdPerMillion: orchestration.inputTokenPriceUsdPerMillion }
+        : {}),
+      ...(orchestration.outputTokenPriceUsdPerMillion !== undefined
+        ? { outputTokenPriceUsdPerMillion: orchestration.outputTokenPriceUsdPerMillion }
+        : {}),
       latencyMs: orchestration.latencyMs,
       error: {
         code: "invalid_llm_reference",
@@ -1080,6 +1104,30 @@ async function generateTurnDraft(llmService: LlmService, save: Save, input: Crea
   }
 
   return orchestration;
+}
+
+function toLlmCallSummary(result: LlmJsonResult<unknown>): LlmCallSummary {
+  const estimatedTokens =
+    result.usage?.totalTokens ?? (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
+
+  return {
+    provider: result.provider,
+    model: result.model,
+    status: result.ok ? "succeeded" : "failed",
+    latencyMs: result.latencyMs,
+    estimatedTokens,
+    ...(result.usage?.inputTokens !== undefined ? { inputTokens: result.usage.inputTokens } : {}),
+    ...(result.usage?.outputTokens !== undefined ? { outputTokens: result.usage.outputTokens } : {}),
+    ...(result.usage?.totalTokens !== undefined ? { totalTokens: result.usage.totalTokens } : {}),
+    ...(result.usage?.estimated !== undefined ? { estimatedUsage: result.usage.estimated } : {}),
+    ...(result.estimatedCostUsd !== undefined ? { estimatedCostUsd: result.estimatedCostUsd } : {}),
+    ...(result.inputTokenPriceUsdPerMillion !== undefined
+      ? { inputTokenPriceUsdPerMillion: result.inputTokenPriceUsdPerMillion }
+      : {}),
+    ...(result.outputTokenPriceUsdPerMillion !== undefined
+      ? { outputTokenPriceUsdPerMillion: result.outputTokenPriceUsdPerMillion }
+      : {})
+  };
 }
 
 function toJobFailure(phase: string, result: FailedLlmJobResult): JobFailure {

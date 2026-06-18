@@ -231,15 +231,75 @@ describe("WorldPage", () => {
     await userEvent.type(screen.getAllByLabelText("Save model base URL")[0]!, "https://save-model.example.test/v1");
     await userEvent.type(screen.getAllByLabelText("Save model")[0]!, "save-model");
     await userEvent.type(screen.getAllByLabelText("Save model API key")[0]!, "save-secret-api-key-value");
+    await userEvent.type(screen.getAllByLabelText("Save model input token price")[0]!, "2");
+    await userEvent.type(screen.getAllByLabelText("Save model output token price")[0]!, "8");
     await userEvent.click(screen.getAllByRole("button", { name: "Save model config" })[0]!);
 
     await waitFor(() =>
       expect(apiMock.updateSaveModelConfig).toHaveBeenCalledWith("save_1", {
         baseUrl: "https://save-model.example.test/v1",
         model: "save-model",
-        apiKey: "save-secret-api-key-value"
+        apiKey: "save-secret-api-key-value",
+        inputTokenPriceUsdPerMillion: 2,
+        outputTokenPriceUsdPerMillion: 8
       })
     );
+  });
+
+  it("shows turn usage and estimated cost", async () => {
+    const save = {
+      ...makeSave(),
+      turnNumber: 1,
+      turns: [
+        {
+          id: "turn_1",
+          saveId: "save_1",
+          turnNumber: 1,
+          status: "accepted" as const,
+          events: [
+            {
+              id: "event_1",
+              title: "Lantern signal",
+              body: "The harbor sees the lantern change color.",
+              involvedCharacterIds: ["character_1"],
+              dialogue: []
+            }
+          ],
+          stateChanges: [],
+          callSummary: {
+            model: "story-model",
+            provider: "openai-compatible" as const,
+            status: "succeeded" as const,
+            calls: 1,
+            durationMs: 1200,
+            estimatedTokens: 400,
+            inputTokens: 100,
+            outputTokens: 300,
+            totalTokens: 400,
+            estimatedCostUsd: 0.0026
+          },
+          createdAt: "2026-06-17T00:00:00.000Z"
+        }
+      ]
+    };
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    apiMock.saves.mockResolvedValue([item]);
+    apiMock.save.mockResolvedValue(save);
+    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
+
+    renderWithClient();
+
+    expect(await screen.findByText("Lantern signal")).toBeInTheDocument();
+    expect(screen.getAllByText(/100 in \/ 300 out \/ 400 total tokens/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\$0.002600/).length).toBeGreaterThan(0);
   });
 
   it("shows failed turn jobs with recovery controls", async () => {

@@ -678,6 +678,7 @@ function Timeline({ save }: { save: Save }) {
   const displayedTurns =
     draftTurn && !save.turns.some((turnItem) => turnItem.id === draftTurn.id) ? [...save.turns, draftTurn] : save.turns;
   const latestTurn = draftTurn ?? save.turns.at(-1);
+  const latestUsageSummary = latestTurn ? formatTurnUsage(latestTurn.callSummary, t) : undefined;
   const rollback = useMutation({
     mutationFn: () => api.rollbackSave(save.id),
     onSuccess: refreshSave
@@ -823,6 +824,7 @@ function Timeline({ save }: { save: Save }) {
                     ) : null}
                   </div>
                 ))}
+                <div className="mt-3 text-xs text-slate-500">{formatTurnUsage(turnItem.callSummary, t)}</div>
               </article>
             ))}
           </div>
@@ -891,7 +893,7 @@ function Timeline({ save }: { save: Save }) {
             {activeTurnJob
               ? `Job ${activeTurnJob.status}${activeTurnJob.phase ? ` · ${activeTurnJob.phase}` : ""}`
               : latestTurn
-                ? `${latestTurn.callSummary.calls} call · ~${latestTurn.callSummary.estimatedTokens} tokens`
+                ? latestUsageSummary
                 : t("world.mockReady")}
           </div>
         </div>
@@ -1229,6 +1231,12 @@ function WorldSettingsEditor({ save }: { save: Save }) {
   const [modelBaseUrl, setModelBaseUrl] = useState(save.modelConfig?.baseUrl ?? "");
   const [modelName, setModelName] = useState(save.modelConfig?.model ?? "");
   const [modelApiKey, setModelApiKey] = useState("");
+  const [inputTokenPrice, setInputTokenPrice] = useState(
+    save.modelConfig?.inputTokenPriceUsdPerMillion?.toString() ?? ""
+  );
+  const [outputTokenPrice, setOutputTokenPrice] = useState(
+    save.modelConfig?.outputTokenPriceUsdPerMillion?.toString() ?? ""
+  );
   const settings = useMutation({
     mutationFn: () =>
       api.patchSave(save.id, {
@@ -1251,6 +1259,8 @@ function WorldSettingsEditor({ save }: { save: Save }) {
       const baseUrl = modelBaseUrl.trim();
       const model = modelName.trim();
       const apiKey = modelApiKey.trim();
+      const parsedInputPrice = parseOptionalPrice(inputTokenPrice);
+      const parsedOutputPrice = parseOptionalPrice(outputTokenPrice);
 
       if (baseUrl) {
         payload.baseUrl = baseUrl;
@@ -1262,6 +1272,14 @@ function WorldSettingsEditor({ save }: { save: Save }) {
 
       if (apiKey) {
         payload.apiKey = apiKey;
+      }
+
+      if (parsedInputPrice !== undefined) {
+        payload.inputTokenPriceUsdPerMillion = parsedInputPrice;
+      }
+
+      if (parsedOutputPrice !== undefined) {
+        payload.outputTokenPriceUsdPerMillion = parsedOutputPrice;
       }
 
       return api.updateSaveModelConfig(save.id, payload);
@@ -1278,6 +1296,8 @@ function WorldSettingsEditor({ save }: { save: Save }) {
       setModelBaseUrl("");
       setModelName("");
       setModelApiKey("");
+      setInputTokenPrice("");
+      setOutputTokenPrice("");
       await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
       await queryClient.invalidateQueries({ queryKey: ["saves"] });
     }
@@ -1368,6 +1388,32 @@ function WorldSettingsEditor({ save }: { save: Save }) {
               onChange={(event) => setModelApiKey(event.target.value)}
             />
           </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              Input $ / 1M tokens
+              <input
+                aria-label="Save model input token price"
+                className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                min={0}
+                step="0.000001"
+                type="number"
+                value={inputTokenPrice}
+                onChange={(event) => setInputTokenPrice(event.target.value)}
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              Output $ / 1M tokens
+              <input
+                aria-label="Save model output token price"
+                className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                min={0}
+                step="0.000001"
+                type="number"
+                value={outputTokenPrice}
+                onChange={(event) => setOutputTokenPrice(event.target.value)}
+              />
+            </label>
+          </div>
         </div>
         <div className="mt-2 text-xs text-slate-500">
           {save.modelConfig
@@ -1883,6 +1929,45 @@ function splitLines(value: string) {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseOptionalPrice(value: string) {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function formatTurnUsage(callSummary: Save["turns"][number]["callSummary"], t: (key: string) => string) {
+  const parts = [
+    callSummary.provider ?? callSummary.model,
+    `${callSummary.calls} call`,
+    usageTokenText(callSummary),
+    `${callSummary.durationMs} ms`,
+    callSummary.estimatedCostUsd !== undefined
+      ? `$${callSummary.estimatedCostUsd.toFixed(6)}`
+      : t("world.costNotConfigured")
+  ];
+
+  if (callSummary.estimatedUsage) {
+    parts.push(t("world.usageEstimated"));
+  }
+
+  return parts.filter(Boolean).join(" · ");
+}
+
+function usageTokenText(callSummary: Save["turns"][number]["callSummary"]) {
+  if (callSummary.inputTokens !== undefined || callSummary.outputTokens !== undefined) {
+    return `${callSummary.inputTokens ?? 0} in / ${callSummary.outputTokens ?? 0} out / ${
+      callSummary.totalTokens ?? callSummary.estimatedTokens
+    } total tokens`;
+  }
+
+  return `~${callSummary.estimatedTokens} tokens`;
 }
 
 function EmptyWorld() {

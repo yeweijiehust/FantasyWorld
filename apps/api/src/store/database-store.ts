@@ -11,6 +11,7 @@ import {
   type CreateTurnInput,
   type GeneratedWorldDraft,
   type JobFailure,
+  type LlmCallSummary,
   type Location,
   type LocationPatch,
   type ModelConfig,
@@ -274,7 +275,11 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
-  async createGenerationJob(input: CreateSaveInput, generatedDraft?: GeneratedWorldDraft): Promise<SaveGenerationJob> {
+  async createGenerationJob(
+    input: CreateSaveInput,
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
       const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
 
@@ -290,6 +295,7 @@ export class DatabaseStore implements FantasyWorldStore {
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       input,
+      ...(llmCall ? { llmCall } : {}),
       draft: {
         id: id("draft"),
         input,
@@ -309,7 +315,11 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  async createFailedGenerationJob(input: CreateSaveInput, failure: JobFailure): Promise<SaveGenerationJob> {
+  async createFailedGenerationJob(
+    input: CreateSaveInput,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
       const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
 
@@ -324,6 +334,7 @@ export class DatabaseStore implements FantasyWorldStore {
       phase: failure.phase,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       input,
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -347,7 +358,11 @@ export class DatabaseStore implements FantasyWorldStore {
     return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
   }
 
-  async failGenerationJob(jobId: string, failure: JobFailure): Promise<SaveGenerationJob | undefined> {
+  async failGenerationJob(
+    jobId: string,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob | undefined> {
     const job = await this.getGenerationJob(jobId);
 
     if (!job) {
@@ -358,6 +373,7 @@ export class DatabaseStore implements FantasyWorldStore {
       ...job,
       status: "failed",
       phase: failure.phase,
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -397,7 +413,8 @@ export class DatabaseStore implements FantasyWorldStore {
 
   async retryGenerationJob(
     jobId: string,
-    generatedDraft?: GeneratedWorldDraft
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
   ): Promise<SaveGenerationJob | undefined> {
     const job = await this.getGenerationJob(jobId);
     const input = job?.input ?? job?.draft?.input;
@@ -416,6 +433,7 @@ export class DatabaseStore implements FantasyWorldStore {
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
       input,
+      ...(llmCall ? { llmCall } : {}),
       draft: {
         id: id("draft"),
         input,
@@ -717,7 +735,8 @@ export class DatabaseStore implements FantasyWorldStore {
   async createTurnJob(
     saveId: string,
     input: CreateTurnInput,
-    orchestration?: TurnOrchestrationOutput
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
   ): Promise<TurnJob | undefined> {
     const save = await this.readSave(saveId);
 
@@ -745,7 +764,8 @@ export class DatabaseStore implements FantasyWorldStore {
       (await this.getModelCredentials({ saveId })).model,
       undefined,
       undefined,
-      orchestration
+      orchestration,
+      llmCall
     );
 
     await this.db.transaction(async (tx) => {
@@ -762,7 +782,12 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  async createFailedTurnJob(saveId: string, input: CreateTurnInput, failure: JobFailure): Promise<TurnJob | undefined> {
+  async createFailedTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
     const save = await this.readSave(saveId);
 
     if (!save) {
@@ -790,6 +815,7 @@ export class DatabaseStore implements FantasyWorldStore {
       phase: failure.phase,
       input,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -806,7 +832,7 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  async failTurnJob(jobId: string, failure: JobFailure): Promise<TurnJob | undefined> {
+  async failTurnJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
     });
@@ -820,6 +846,7 @@ export class DatabaseStore implements FantasyWorldStore {
       ...job,
       status: "failed",
       phase: failure.phase,
+      ...(llmCall ? { llmCall } : {}),
       error: failure.message,
       failure
     };
@@ -905,7 +932,11 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  async retryTurnJob(jobId: string, orchestration?: TurnOrchestrationOutput): Promise<TurnJob | undefined> {
+  async retryTurnJob(
+    jobId: string,
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
     });
@@ -932,7 +963,8 @@ export class DatabaseStore implements FantasyWorldStore {
       (await this.getModelCredentials({ saveId: job.saveId })).model,
       job.id,
       job.idempotencyKey,
-      orchestration
+      orchestration,
+      llmCall
     );
 
     await this.db.transaction(async (tx) => {
