@@ -13,6 +13,7 @@
     "prettier.config.js",
     "playwright.config.ts",
     "vitest.workspace.ts",
+    "scripts/**/*.mjs",
     "tests/**/*.ts"
   ]
 }
