@@ -5,6 +5,7 @@ import type {
   CreateRelationshipInput,
   CreateSaveInput,
   CreateTurnInput,
+  GeneratedWorldDraft,
   LocationPatch,
   ModelConfig,
   PatchTurnDraftInput,
@@ -28,7 +29,13 @@ export type FantasyWorldStore = {
   updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): ModelConfig | Promise<ModelConfig>;
   listSaves(): SaveListItem[] | Promise<SaveListItem[]>;
   getSave(saveId: string): Save | undefined | Promise<Save | undefined>;
-  createGenerationJob(input: CreateSaveInput): SaveGenerationJob | Promise<SaveGenerationJob>;
+  createGenerationJob(
+    input: CreateSaveInput,
+    generatedDraft?: GeneratedWorldDraft
+  ): SaveGenerationJob | Promise<SaveGenerationJob>;
+  getGenerationJobByIdempotencyKey(
+    idempotencyKey: string
+  ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   getGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   cancelGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   retryGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;

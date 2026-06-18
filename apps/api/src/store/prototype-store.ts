@@ -6,6 +6,7 @@ import type {
   CreateLocationInput,
   CreateRelationshipInput,
   JobStatus,
+  GeneratedWorldDraft,
   Location,
   LocationPatch,
   ModelConfig,
@@ -132,16 +133,16 @@ export class PrototypeStore implements FantasyWorldStore {
     return save ? structuredClone(save) : undefined;
   }
 
-  createGenerationJob(input: CreateSaveInput): SaveGenerationJob {
+  createGenerationJob(input: CreateSaveInput, generatedDraft?: GeneratedWorldDraft): SaveGenerationJob {
     if (input.idempotencyKey) {
-      const existing = [...this.generationJobs.values()].find((job) => job.idempotencyKey === input.idempotencyKey);
+      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
 
       if (existing) {
-        return structuredClone(existing);
+        return existing;
       }
     }
 
-    const save = buildSave(input);
+    const save = buildSave(input, generatedDraft);
     const job: SaveGenerationJob = {
       id: id("generation_job"),
       status: "needs_review",
@@ -157,6 +158,11 @@ export class PrototypeStore implements FantasyWorldStore {
 
     this.generationJobs.set(job.id, job);
     return structuredClone(job);
+  }
+
+  getGenerationJobByIdempotencyKey(idempotencyKey: string): SaveGenerationJob | undefined {
+    const job = [...this.generationJobs.values()].find((item) => item.idempotencyKey === idempotencyKey);
+    return job ? structuredClone(job) : undefined;
   }
 
   getGenerationJob(jobId: string): SaveGenerationJob | undefined {
@@ -646,7 +652,11 @@ export class PrototypeStore implements FantasyWorldStore {
 
 export const prototypeStore = new PrototypeStore();
 
-export function buildSave(input: CreateSaveInput): Save {
+export function buildSave(input: CreateSaveInput, generatedDraft?: GeneratedWorldDraft): Save {
+  if (generatedDraft) {
+    return buildGeneratedSave(input, generatedDraft);
+  }
+
   const createdAt = now();
   const template = getWorldTemplate(input.templateId);
   const language = input.settings.language;
@@ -706,6 +716,136 @@ export function buildSave(input: CreateSaveInput): Save {
     createdAt,
     updatedAt: createdAt
   };
+}
+
+export function buildGeneratedWorldDraft(input: CreateSaveInput): GeneratedWorldDraft {
+  const template = getWorldTemplate(input.templateId);
+  const language = input.settings.language;
+  const premise = input.premise.trim() || template.premise[language];
+  const seeds = input.characterSeeds
+    .map((seed) => seed.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const locationName = template.location.name[language];
+
+  return {
+    description: premise,
+    worldSummary: premise,
+    locations: [
+      {
+        name: locationName,
+        description: template.location.description[language],
+        status: template.location.status[language]
+      }
+    ],
+    characters: seeds.map((seed) => ({
+      name: seed,
+      profile:
+        language === "zh"
+          ? `${seed} 被卷入了《${input.name}》的核心冲突：${premise}`
+          : `${seed} has been pulled into the central conflict of ${input.name}: ${premise}`,
+      personality: language === "zh" ? "谨慎、执着、会隐藏真实动机" : "Careful, driven, and private",
+      longTermGoal: language === "zh" ? "保护自己珍视的东西" : "Protect what matters most",
+      shortTermGoal: language === "zh" ? "弄清当前局势的真正威胁" : "Understand the immediate threat",
+      locationName,
+      status: language === "zh" ? "可行动" : "Available",
+      secrets: [language === "zh" ? "掌握一条尚未公开的线索" : "Knows one unrevealed lead"],
+      privateMemory: [language === "zh" ? "记得世界刚刚开始运转" : "Remembers the world beginning to move"]
+    })),
+    relationships: seeds.slice(1).map((seed, index) => ({
+      sourceCharacterName: seeds[0] ?? seed,
+      targetCharacterName: seed,
+      label: language === "zh" ? (index % 2 === 0 ? "信任" : "试探") : index % 2 === 0 ? "Trust" : "Testing",
+      strength: index % 2 === 0 ? 35 : 10,
+      summary: language === "zh" ? "彼此有合作空间，但仍保留秘密。" : "They can cooperate, but both still keep secrets."
+    }))
+  };
+}
+
+function buildGeneratedSave(input: CreateSaveInput, generatedDraft: GeneratedWorldDraft): Save {
+  const createdAt = now();
+  const locationDrafts = generatedDraft.locations.slice(0, 5);
+  const locations = locationDrafts.map<Location>((location) => ({
+    id: id("location"),
+    name: location.name,
+    description: location.description,
+    status: location.status
+  }));
+  const locationByName = new Map(locations.map((location) => [normalizeName(location.name), location]));
+  const fallbackLocation = locations[0];
+  const characters = generatedDraft.characters.slice(0, 8).map<Character>((character) => ({
+    id: id("character"),
+    name: character.name,
+    profile: character.profile,
+    personality: character.personality,
+    longTermGoal: character.longTermGoal,
+    shortTermGoal: character.shortTermGoal,
+    locationId:
+      locationByName.get(normalizeName(character.locationName ?? ""))?.id ?? fallbackLocation?.id ?? id("location"),
+    status: character.status,
+    secrets: character.secrets,
+    privateMemory: character.privateMemory
+  }));
+  const characterByName = new Map(characters.map((character) => [normalizeName(character.name), character]));
+  const relationships = generatedDraft.relationships
+    .map<Relationship | undefined>((relationship) => {
+      const source = characterByName.get(normalizeName(relationship.sourceCharacterName));
+      const target = characterByName.get(normalizeName(relationship.targetCharacterName));
+
+      if (!source || !target || source.id === target.id) {
+        return undefined;
+      }
+
+      return {
+        id: id("relationship"),
+        sourceCharacterId: source.id,
+        targetCharacterId: target.id,
+        label: relationship.label,
+        strength: clampRelationshipStrength(relationship.strength),
+        summary: relationship.summary
+      };
+    })
+    .filter((relationship): relationship is Relationship => Boolean(relationship));
+
+  return {
+    id: id("save"),
+    name: input.name,
+    description: generatedDraft.description,
+    schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
+    turnNumber: 0,
+    saveSeed: id("seed"),
+    settings: input.settings,
+    worldMemory: {
+      timeline: [],
+      worldSummary: generatedDraft.worldSummary,
+      locationSummaries: Object.fromEntries(locations.map((location) => [location.id, location.description]))
+    },
+    characters,
+    locations,
+    relationships: relationships.length > 0 ? relationships : buildFallbackRelationships(characters, input),
+    turns: [],
+    createdAt,
+    updatedAt: createdAt
+  };
+}
+
+function buildFallbackRelationships(characters: Character[], input: CreateSaveInput): Relationship[] {
+  return characters.slice(1).map((character, index) => ({
+    id: id("relationship"),
+    sourceCharacterId: characters[0]?.id ?? character.id,
+    targetCharacterId: character.id,
+    label:
+      input.settings.language === "zh" ? (index % 2 === 0 ? "信任" : "试探") : index % 2 === 0 ? "Trust" : "Testing",
+    strength: index % 2 === 0 ? 35 : 10,
+    summary:
+      input.settings.language === "zh"
+        ? "彼此有合作空间，但仍保留秘密。"
+        : "They can cooperate, but both still keep secrets."
+  }));
+}
+
+function normalizeName(value: string) {
+  return value.trim().toLocaleLowerCase();
 }
 
 export function isActiveJobStatus(status: JobStatus) {

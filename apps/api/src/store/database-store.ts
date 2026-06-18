@@ -9,6 +9,7 @@ import {
   type CreateRelationshipInput,
   type CreateSaveInput,
   type CreateTurnInput,
+  type GeneratedWorldDraft,
   type Location,
   type LocationPatch,
   type ModelConfig,
@@ -182,16 +183,16 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
-  async createGenerationJob(input: CreateSaveInput): Promise<SaveGenerationJob> {
+  async createGenerationJob(input: CreateSaveInput, generatedDraft?: GeneratedWorldDraft): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
-      const existing = await this.findGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
 
       if (existing) {
         return existing;
       }
     }
 
-    const save = buildSave(input);
+    const save = buildSave(input, generatedDraft);
     const job: SaveGenerationJob = {
       id: id("generation_job"),
       status: "needs_review",
@@ -799,7 +800,7 @@ export class DatabaseStore implements FantasyWorldStore {
     return row ? structuredClone(row.data as TurnJob) : undefined;
   }
 
-  private async findGenerationJobByIdempotencyKey(idempotencyKey: string): Promise<SaveGenerationJob | undefined> {
+  async getGenerationJobByIdempotencyKey(idempotencyKey: string): Promise<SaveGenerationJob | undefined> {
     const rows = await this.db.select().from(dbSchema.saveGenerationJobs);
     const row = rows.find((item) => (item.data as SaveGenerationJob).idempotencyKey === idempotencyKey);
 

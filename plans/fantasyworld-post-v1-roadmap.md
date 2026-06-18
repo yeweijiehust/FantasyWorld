@@ -11,11 +11,15 @@ Actions。
 
 ### Post-v1 Step 1：修正文档口径
 
+状态：已在 PR #21 完成。
+
 - 明确 v1 是可玩原型，不是完整真实 LLM 推演版本。
 - 将真实 LLM 世界生成、真实回合推演、成本计算、后台 worker、多用户等能力归入 Post-v1。
 - 验收：计划文档不会让读者误解为真实 LLM 已经驱动游戏。
 
 ### Post-v1 Step 2：LLM 结构化生成接口
+
+状态：已在 PR #21 完成。
 
 - 扩展 LLM service，使其不只支持连接探测，还支持结构化 JSON 生成。
 - mock provider 和 OpenAI-compatible provider 使用同一契约。
@@ -23,6 +27,8 @@ Actions。
 - 验收：mock provider 单测稳定，真实 provider 可通过 OpenAI-compatible JSON mode 调用，CI 不需要真实 key。
 
 ### Post-v1 Step 3：真实 LLM 创建世界
+
+状态：已在 PR #21 后续提交完成，待合并。
 
 - 创建世界草稿由 LLM 生成结构化 save draft。
 - 输入包含模板、世界设定、角色种子、语言、内容边界、随机性和风格。
@@ -109,7 +115,5 @@ Actions。
 
 当前优先实现 Post-v1 Step 1-4：
 
-- 先修正文档口径。
-- 再实现 LLM 结构化生成接口。
-- 然后接入真实 LLM 创建世界。
-- 最后接入真实 LLM 回合推演。
+- Step 1-3 已完成到 draft PR。
+- 下一步接入真实 LLM 回合推演。

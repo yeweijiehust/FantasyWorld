@@ -450,6 +450,231 @@ describe("FantasyWorld API prototype", () => {
     await app.close();
   });
 
+  it("uses structured LLM output for save generation when a model API key is configured", async () => {
+    const store = new PrototypeStore();
+    store.updateModelConfig({
+      model: "story-model",
+      apiKey: "test-secret-api-key-value"
+    });
+    let calls = 0;
+    let userPrompt = "";
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "story-model",
+            hasApiKey: true,
+            apiKeyTail: "alue"
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson(_input, request) {
+        calls += 1;
+        userPrompt = request.userPrompt;
+
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output: {
+            description: "A city whose clocks predict disasters before they happen.",
+            worldSummary: "Clockwork Harbor is tense, prophetic, and divided by who controls the bells.",
+            locations: [
+              {
+                name: "Clockwork Harbor",
+                description: "A port of brass towers, tide engines, and omen bells.",
+                status: "The warning bells are ringing early."
+              }
+            ],
+            characters: [
+              {
+                name: "Ada",
+                profile: "A bellwright trying to prove the clocks are being sabotaged.",
+                personality: "Precise, stubborn, and quietly compassionate",
+                longTermGoal: "Protect the harbor from false prophecies",
+                shortTermGoal: "Find the sabotaged bell",
+                locationName: "Clockwork Harbor",
+                status: "Following a false alarm",
+                secrets: ["Knows one bell has a hidden manual override"],
+                privateMemory: ["Heard the ninth bell ring before sunrise"]
+              },
+              {
+                name: "Bryn",
+                profile: "A dock negotiator hiding debts to the bell guild.",
+                personality: "Charming, evasive, and pragmatic",
+                longTermGoal: "Escape the guild's leverage",
+                shortTermGoal: "Keep shipments moving",
+                locationName: "Clockwork Harbor",
+                status: "Stalling angry captains",
+                secrets: ["Owes the guild a dangerous favor"],
+                privateMemory: ["Saw a guild seal on the broken crate"]
+              },
+              {
+                name: "Cato",
+                profile: "A young oracle who distrusts mechanical prophecy.",
+                personality: "Bold, suspicious, and idealistic",
+                longTermGoal: "Free the city from machine omens",
+                shortTermGoal: "Expose the next false warning",
+                locationName: "Clockwork Harbor",
+                status: "Watching the bell tower",
+                secrets: ["Can hear a human voice under the bells"],
+                privateMemory: ["Dreamed of the harbor flooding backward"]
+              }
+            ],
+            relationships: [
+              {
+                sourceCharacterName: "Ada",
+                targetCharacterName: "Bryn",
+                label: "Uneasy allies",
+                strength: 42,
+                summary: "They need each other, but both suspect the other is hiding guild ties."
+              }
+            ]
+          },
+          usage: {
+            inputTokens: 100,
+            outputTokens: 300,
+            totalTokens: 400
+          },
+          latencyMs: 1
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider)
+    });
+    const cookie = await login(app);
+    const payload = {
+      templateId: "fantasy-frontier",
+      name: "Clockwork Harbor",
+      premise: "Omen clocks predict disasters too accurately.",
+      characterSeeds: ["Ada", "Bryn", "Cato"],
+      settings: {
+        language: "en" as const,
+        turnTimeScale: "One scene",
+        randomness: 30,
+        contentBoundary: "PG",
+        styleGuide: "Make prophecy feel mechanical and political"
+      },
+      idempotencyKey: "llm-world-generation"
+    };
+
+    const generation = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+
+    expect(generation.statusCode).toBe(201);
+    expect(duplicate.statusCode).toBe(201);
+    expect(calls).toBe(1);
+    expect(userPrompt).toContain("Clockwork Harbor");
+
+    const job = generation.json<SaveGenerationJob>();
+    const duplicateJob = duplicate.json<SaveGenerationJob>();
+    expect(duplicateJob.id).toBe(job.id);
+    expect(job.draft?.save.description).toBe("A city whose clocks predict disasters before they happen.");
+    expect(job.draft?.save.worldMemory.worldSummary).toContain("prophetic");
+    expect(job.draft?.save.locations[0]?.name).toBe("Clockwork Harbor");
+    expect(job.draft?.save.characters.map((character) => character.name)).toEqual(["Ada", "Bryn", "Cato"]);
+    expect(job.draft?.save.relationships[0]?.label).toBe("Uneasy allies");
+    expect(JSON.stringify(job)).not.toContain("test-secret-api-key-value");
+
+    await app.close();
+  });
+
+  it("rejects invalid structured LLM save drafts without creating a job", async () => {
+    const store = new PrototypeStore();
+    store.updateModelConfig({
+      model: "story-model",
+      apiKey: "test-secret-api-key-value"
+    });
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "story-model",
+            hasApiKey: true
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output: {
+            description: "Too small",
+            worldSummary: "Missing playable cast",
+            locations: [],
+            characters: [],
+            relationships: []
+          },
+          latencyMs: 1
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider)
+    });
+    const cookie = await login(app);
+
+    const generation = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload: {
+        templateId: "fantasy-frontier",
+        name: "Broken Draft",
+        premise: "The model returns an invalid world.",
+        characterSeeds: ["Ada", "Bryn", "Cato"],
+        settings: {
+          language: "en",
+          turnTimeScale: "One scene",
+          randomness: 30,
+          contentBoundary: "PG",
+          styleGuide: "Keep it coherent"
+        }
+      }
+    });
+    const saves = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(generation.statusCode).toBe(502);
+    expect(generation.json<{ error: { code: string } }>().error.code).toBe("schema_validation_failed");
+    expect(saves.json<SaveListItem[]>()).toEqual([]);
+
+    await app.close();
+  });
+
   it("rejects save drafts outside the 3 to 8 character range", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
     const cookie = await login(app);

@@ -15,6 +15,7 @@ import {
   CreateRelationshipInputSchema,
   CreateSaveInputSchema,
   CreateTurnInputSchema,
+  GeneratedWorldDraftSchema,
   LocationPatchSchema,
   ModelConfigSchema,
   ModelProbeInputSchema,
@@ -35,7 +36,8 @@ import { verifyPassword } from "./auth/password.js";
 import type { AppEnv } from "./config/env.js";
 import { createSaveExport, normalizeSaveImport } from "./import-export.js";
 import { LlmService } from "./llm/service.js";
-import { prototypeStore } from "./store/prototype-store.js";
+import { buildWorldGenerationSystemPrompt, buildWorldGenerationUserPrompt } from "./llm/world-generation.js";
+import { buildGeneratedWorldDraft, prototypeStore } from "./store/prototype-store.js";
 import type { FantasyWorldStore } from "./store/types.js";
 
 const ParamsWithIdSchema = Type.Object({ id: Type.String() });
@@ -578,13 +580,37 @@ export function buildApp(options: BuildAppOptions) {
       schema: {
         body: CreateSaveInputSchema,
         response: {
-          201: SaveGenerationJobSchema
+          201: SaveGenerationJobSchema,
+          502: ApiErrorSchema
         }
       }
     },
     async (request, reply) => {
+      if (request.body.idempotencyKey) {
+        const existing = await store.getGenerationJobByIdempotencyKey(request.body.idempotencyKey);
+
+        if (existing) {
+          reply.code(201);
+          return existing;
+        }
+      }
+
+      const generatedDraft = await llmService.generateJson({
+        schema: GeneratedWorldDraftSchema,
+        schemaName: "GeneratedWorldDraft",
+        systemPrompt: buildWorldGenerationSystemPrompt(),
+        userPrompt: buildWorldGenerationUserPrompt(request.body),
+        mockOutput: buildGeneratedWorldDraft(request.body),
+        temperature: 0.7,
+        maxTokens: 4_000
+      });
+
+      if (!generatedDraft.ok) {
+        return sendError(reply, 502, generatedDraft.error.code, generatedDraft.error.message);
+      }
+
       reply.code(201);
-      return await store.createGenerationJob(request.body);
+      return await store.createGenerationJob(request.body, generatedDraft.output);
     }
   );
 

@@ -282,6 +282,44 @@ export const SaveImportSchema = Type.Union([
 ]);
 export type SaveImport = Static<typeof SaveImportSchema>;
 
+export const GeneratedWorldDraftSchema = Type.Object({
+  description: Type.String({ minLength: 1 }),
+  worldSummary: Type.String({ minLength: 1 }),
+  locations: Type.Array(
+    Type.Object({
+      name: Type.String({ minLength: 1 }),
+      description: Type.String({ minLength: 1 }),
+      status: Type.String({ minLength: 1 })
+    }),
+    { minItems: 1, maxItems: 5 }
+  ),
+  characters: Type.Array(
+    Type.Object({
+      name: Type.String({ minLength: 1 }),
+      profile: Type.String({ minLength: 1 }),
+      personality: Type.String({ minLength: 1 }),
+      longTermGoal: Type.String({ minLength: 1 }),
+      shortTermGoal: Type.String({ minLength: 1 }),
+      locationName: Type.Optional(Type.String({ minLength: 1 })),
+      status: Type.String({ minLength: 1 }),
+      secrets: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 5 }),
+      privateMemory: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 8 })
+    }),
+    { minItems: 3, maxItems: 8 }
+  ),
+  relationships: Type.Array(
+    Type.Object({
+      sourceCharacterName: Type.String({ minLength: 1 }),
+      targetCharacterName: Type.String({ minLength: 1 }),
+      label: Type.String({ minLength: 1 }),
+      strength: Type.Number({ minimum: 0, maximum: 100 }),
+      summary: Type.String({ minLength: 1 })
+    }),
+    { maxItems: 16 }
+  )
+});
+export type GeneratedWorldDraft = Static<typeof GeneratedWorldDraftSchema>;
+
 export const SaveListItemSchema = Type.Object({
   id: IdSchema,
   name: Type.String(),
