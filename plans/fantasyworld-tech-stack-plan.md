@@ -88,48 +88,46 @@ FantasyWorld/
 ## API Surface
 
 - `GET /api/health`
+- `GET /api/auth/session`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
-- `GET /api/auth/session`
 - `GET /api/model-config`
 - `PUT /api/model-config`
+- `POST /api/model-config/probe`
 - `GET /api/saves`
-- `POST /api/saves`
 - `GET /api/saves/:id`
 - `PATCH /api/saves/:id`
-- `DELETE /api/saves/:id`
 - `GET /api/saves/:id/world-state`
+- `GET /api/saves/:id/export`
+- `POST /api/saves/import`
+- `POST /api/saves/:id/rollback`
 - `PATCH /api/saves/:id/settings`
-- `PATCH /api/saves/:id/model-config`
-- `GET /api/saves/:id/characters`
 - `POST /api/saves/:id/characters`
 - `PATCH /api/saves/:id/characters/:characterId`
 - `DELETE /api/saves/:id/characters/:characterId`
-- `PATCH /api/saves/:id/characters/:characterId/memory`
-- `GET /api/saves/:id/locations`
 - `POST /api/saves/:id/locations`
 - `PATCH /api/saves/:id/locations/:locationId`
 - `DELETE /api/saves/:id/locations/:locationId`
-- `GET /api/saves/:id/relationships`
 - `POST /api/saves/:id/relationships`
 - `PATCH /api/saves/:id/relationships/:relationshipId`
 - `DELETE /api/saves/:id/relationships/:relationshipId`
 - `PATCH /api/saves/:id/world-memory`
-- `POST /api/saves/import`
-- `GET /api/saves/:id/export`
 - `POST /api/save-generation-jobs`
+- `GET /api/save-generation-jobs/:id`
 - `GET /api/save-generation-jobs/:id/events`
-- `PATCH /api/save-generation-jobs/:id/draft`
-- `POST /api/save-generation-jobs/:id/accept`
 - `POST /api/save-generation-jobs/:id/cancel`
 - `POST /api/save-generation-jobs/:id/retry`
+- `POST /api/save-generation-jobs/:id/accept`
 - `POST /api/saves/:id/turns`
+- `GET /api/turn-jobs/:id`
 - `GET /api/turn-jobs/:id/events`
+- `PATCH /api/turn-jobs/:id/draft`
 - `POST /api/turn-jobs/:id/cancel`
 - `POST /api/turn-jobs/:id/retry`
-- `PATCH /api/turns/:id/draft`
 - `POST /api/turns/:id/accept`
-- `POST /api/saves/:id/rollback`
+
+当前实现把角色、地点、关系作为 `GET /api/saves/:id` 和 `GET /api/saves/:id/world-state`
+响应的一部分返回，不额外提供独立列表端点。存档级模型覆盖在创建世界输入中保留，后续若要做可编辑持久覆盖，再新增独立 API。
 
 ## Database Model
 
@@ -219,7 +217,8 @@ FantasyWorld/
 - `ci.yml`：
   - 触发：`pull_request` 到 `main`、`push` 到 `main`。
   - 使用 Node 24、pnpm 10、`actions/checkout`、`actions/setup-node` 和 pnpm cache。
-  - 执行 `pnpm install --frozen-lockfile`、`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`。
+  - 执行
+    `pnpm install --frozen-lockfile`、`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`、`pnpm check:render`。
   - API/DB 测试使用 GitHub Actions Postgres service container，运行迁移后测试，不依赖外部测试数据库。
 - `security.yml`：
   - 触发：`pull_request`、`push` 到 `main`。
@@ -247,7 +246,7 @@ FantasyWorld/
 - GitHub Actions checks：PR 自动运行 `ci.yml` 并阻塞不合格 merge；`security.yml` 检查依赖和泄密风险；`e2e.yml`
   可手动触发。
 - Deployment checks：用户手动完成 Render 连接和首次部署；后续 `main` 合并触发 Render 自动部署，部署完成后由用户检查
-  `/api/health`。
+  `/api/health` 和公开前端 shell。
 
 ## Assumptions And Defaults
 

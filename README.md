@@ -36,6 +36,7 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
+pnpm check:render
 pnpm test:e2e
 ```
 
@@ -45,3 +46,4 @@ pnpm test:e2e
 - [Tech stack plan](plans/fantasyworld-tech-stack-plan.md)
 - [Project conventions](plans/fantasyworld-project-conventions.md)
 - [Implementation roadmap](plans/fantasyworld-implementation-roadmap.md)
+- [V1 release checklist](plans/fantasyworld-v1-release-checklist.md)
