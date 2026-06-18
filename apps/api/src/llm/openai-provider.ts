@@ -1,6 +1,12 @@
 import OpenAI from "openai";
 import type { ModelProbeResult } from "@fantasy-world/shared";
-import { publicModelConfig, type LlmProvider } from "./types.js";
+import {
+  publicModelConfig,
+  type LlmProvider,
+  type LlmProviderJsonRequest,
+  type LlmProviderJsonResult,
+  type LlmJsonUsage
+} from "./types.js";
 
 export class OpenAiCompatibleProvider implements LlmProvider {
   async probe(input: Parameters<LlmProvider["probe"]>[0]): Promise<ModelProbeResult> {
@@ -66,6 +72,125 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       latencyMs: Math.round(performance.now() - startedAt)
     };
   }
+
+  async generateJson(
+    input: Parameters<LlmProvider["generateJson"]>[0],
+    request: LlmProviderJsonRequest
+  ): Promise<LlmProviderJsonResult> {
+    const startedAt = performance.now();
+
+    if (!input.apiKey) {
+      return {
+        ok: false,
+        provider: "openai-compatible",
+        latencyMs: Math.round(performance.now() - startedAt),
+        error: {
+          code: "missing_api_key",
+          message: "API key is required to generate structured JSON"
+        }
+      } satisfies LlmProviderJsonResult;
+    }
+
+    const client = new OpenAI({
+      apiKey: input.apiKey,
+      baseURL: input.baseUrl,
+      maxRetries: 0,
+      timeout: 30_000
+    });
+
+    try {
+      const response = await client.chat.completions.create({
+        model: input.model,
+        messages: [
+          {
+            role: "system",
+            content: [
+              request.systemPrompt,
+              `Return only valid JSON for ${request.schemaName}.`,
+              "The JSON must match this TypeBox schema:",
+              JSON.stringify(request.schema)
+            ].join("\n\n")
+          },
+          {
+            role: "user",
+            content: request.userPrompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: request.maxTokens ?? 2_000,
+        temperature: request.temperature ?? 0.4
+      });
+      const rawOutput = response.choices[0]?.message?.content ?? "";
+
+      if (!rawOutput.trim()) {
+        return {
+          ok: false,
+          provider: "openai-compatible",
+          rawOutput,
+          latencyMs: Math.round(performance.now() - startedAt),
+          error: {
+            code: "empty_response",
+            message: "The model returned an empty response"
+          }
+        } satisfies LlmProviderJsonResult;
+      }
+
+      try {
+        const usage = normalizeUsage(response.usage);
+
+        return {
+          ok: true,
+          provider: "openai-compatible",
+          output: JSON.parse(rawOutput) as unknown,
+          rawOutput,
+          ...(usage ? { usage } : {}),
+          latencyMs: Math.round(performance.now() - startedAt)
+        };
+      } catch {
+        return {
+          ok: false,
+          provider: "openai-compatible",
+          rawOutput,
+          latencyMs: Math.round(performance.now() - startedAt),
+          error: {
+            code: "invalid_json",
+            message: "The model returned invalid JSON"
+          }
+        } satisfies LlmProviderJsonResult;
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        provider: "openai-compatible",
+        latencyMs: Math.round(performance.now() - startedAt),
+        error: normalizeLlmError(error)
+      } satisfies LlmProviderJsonResult;
+    }
+  }
+}
+
+function normalizeUsage(
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined
+) {
+  if (!usage) {
+    return undefined;
+  }
+
+  const normalized: LlmJsonUsage = {};
+
+  if (typeof usage.prompt_tokens === "number") {
+    normalized.inputTokens = usage.prompt_tokens;
+  }
+
+  if (typeof usage.completion_tokens === "number") {
+    normalized.outputTokens = usage.completion_tokens;
+  }
+
+  if (typeof usage.total_tokens === "number") {
+    normalized.totalTokens = usage.total_tokens;
+  }
+
+  return normalized;
 }
 
 async function probeJsonMode(client: OpenAI, model: string) {

@@ -2,7 +2,8 @@
 
 FantasyWorld is an LLM-driven world simulation game prototype. The first implementation focuses on a single-player GM
 workbench with generated world drafts, visible world state, mock turn advancement, turn review, rollback, JSON
-import/export, model configuration, and a Fastify + React monorepo foundation.
+import/export, model configuration, and a Fastify + React monorepo foundation. Real LLM-driven world generation and turn
+orchestration are tracked in the Post-v1 roadmap.
 
 ## Development
 
@@ -47,3 +48,4 @@ pnpm test:e2e
 - [Project conventions](plans/fantasyworld-project-conventions.md)
 - [Implementation roadmap](plans/fantasyworld-implementation-roadmap.md)
 - [V1 release checklist](plans/fantasyworld-v1-release-checklist.md)
+- [Post-v1 roadmap](plans/fantasyworld-post-v1-roadmap.md)

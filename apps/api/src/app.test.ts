@@ -281,6 +281,17 @@ describe("FantasyWorld API auth and model config safety", () => {
             message: "The model provider rejected the API key"
           }
         });
+      },
+      generateJson() {
+        return Promise.resolve({
+          ok: false,
+          provider: "openai-compatible",
+          latencyMs: 1,
+          error: {
+            code: "invalid_api_key",
+            message: "The model provider rejected the API key"
+          }
+        });
       }
     };
     const app = buildApp({
