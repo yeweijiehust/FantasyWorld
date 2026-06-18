@@ -83,6 +83,7 @@ FantasyWorld/
 - response schema 必填，以启用 Fastify response serialization 和 OpenAPI 输出。
 - 所有错误统一走 Fastify error handler，返回稳定错误格式。
 - 服务在 Render 上监听 `process.env.PORT` 和 `0.0.0.0`。
+- 生产环境静态前端 shell、assets 和 SPA fallback 必须公开加载；登录保护只拦截非公开业务 API。
 
 ## API Surface
 

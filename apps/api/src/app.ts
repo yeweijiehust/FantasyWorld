@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cookie from "@fastify/cookie";
@@ -116,7 +117,7 @@ export function buildApp(options: BuildAppOptions) {
   });
 
   app.addHook("preHandler", async (request, reply) => {
-    if (isPublicPath(request.url)) {
+    if (!requiresSession(request.url)) {
       return;
     }
 
@@ -794,10 +795,8 @@ export function buildApp(options: BuildAppOptions) {
   );
 
   if (options.env.nodeEnv === "production") {
-    const dirname = path.dirname(fileURLToPath(import.meta.url));
-    const root = path.resolve(dirname, "../../../web/dist");
     app.register(fastifyStatic, {
-      root,
+      root: resolveWebDistRoot(),
       prefix: "/"
     });
     app.setNotFoundHandler((_request, reply) => reply.sendFile("index.html"));
@@ -806,13 +805,30 @@ export function buildApp(options: BuildAppOptions) {
   return app;
 }
 
-function isPublicPath(url: string) {
-  return (
-    url.startsWith("/api/health") ||
-    url.startsWith("/api/auth/login") ||
-    url.startsWith("/api/auth/session") ||
-    url.startsWith("/docs") ||
-    url.startsWith("/documentation")
+function resolveWebDistRoot() {
+  const dirname = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(process.cwd(), "../web/dist"),
+    path.resolve(dirname, "../../../web/dist"),
+    path.resolve(dirname, "../../web/dist")
+  ];
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? path.resolve(process.cwd(), "../web/dist");
+}
+
+export function requiresSession(url: string) {
+  const pathname = url.split("?")[0] ?? url;
+
+  if (isPublicApiPath(pathname)) {
+    return false;
+  }
+
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
+function isPublicApiPath(pathname: string) {
+  return ["/api/health", "/api/auth/login", "/api/auth/session"].some(
+    (publicPath) => pathname === publicPath || pathname.startsWith(`${publicPath}/`)
   );
 }
 
