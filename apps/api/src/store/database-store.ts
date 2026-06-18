@@ -21,6 +21,7 @@ import {
   type SaveListItem,
   type StateChange,
   type Turn,
+  type TurnOrchestrationOutput,
   type TurnJob,
   type WorldMemory
 } from "@fantasy-world/shared";
@@ -564,7 +565,11 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
-  async createTurnJob(saveId: string, input: CreateTurnInput): Promise<TurnJob | undefined> {
+  async createTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    orchestration?: TurnOrchestrationOutput
+  ): Promise<TurnJob | undefined> {
     const save = await this.readSave(saveId);
 
     if (!save) {
@@ -572,20 +577,27 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = await this.findTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = await this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
 
       if (existing) {
         return existing;
       }
     }
 
-    const active = await this.findActiveTurnJob(saveId);
+    const active = await this.getActiveTurnJob(saveId);
 
     if (active) {
       return active;
     }
 
-    const { job } = buildTurnDraft(save, input, (await this.getModelConfig()).model);
+    const { job } = buildTurnDraft(
+      save,
+      input,
+      (await this.getModelConfig()).model,
+      undefined,
+      undefined,
+      orchestration
+    );
 
     await this.db.transaction(async (tx) => {
       await tx.insert(dbSchema.turnJobs).values({
@@ -807,14 +819,14 @@ export class DatabaseStore implements FantasyWorldStore {
     return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
   }
 
-  private async findTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): Promise<TurnJob | undefined> {
+  async getTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): Promise<TurnJob | undefined> {
     const rows = await this.db.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, saveId));
     const row = rows.find((item) => (item.data as TurnJob).idempotencyKey === idempotencyKey);
 
     return row ? structuredClone(row.data as TurnJob) : undefined;
   }
 
-  private async findActiveTurnJob(saveId: string): Promise<TurnJob | undefined> {
+  async getActiveTurnJob(saveId: string): Promise<TurnJob | undefined> {
     const rows = await this.db.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, saveId));
     const row = rows.find((item) => isActiveJobStatus((item.data as TurnJob).status));
 

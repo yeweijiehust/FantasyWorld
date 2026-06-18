@@ -13,6 +13,7 @@ import type {
   Save,
   SaveGenerationJob,
   SaveListItem,
+  TurnOrchestrationOutput,
   TurnJob
 } from "@fantasy-world/shared";
 
@@ -62,7 +63,16 @@ export type FantasyWorldStore = {
     patch: RelationshipPatch
   ): Save | undefined | Promise<Save | undefined>;
   deleteRelationship(saveId: string, relationshipId: string): Save | undefined | Promise<Save | undefined>;
-  createTurnJob(saveId: string, input: CreateTurnInput): TurnJob | undefined | Promise<TurnJob | undefined>;
+  createTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    orchestration?: TurnOrchestrationOutput
+  ): TurnJob | undefined | Promise<TurnJob | undefined>;
+  getTurnJobByIdempotencyKey(
+    saveId: string,
+    idempotencyKey: string
+  ): TurnJob | undefined | Promise<TurnJob | undefined>;
+  getActiveTurnJob(saveId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined | Promise<TurnJob | undefined>;
   cancelTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   retryTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;

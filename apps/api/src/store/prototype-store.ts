@@ -18,6 +18,7 @@ import type {
   SaveGenerationJob,
   SaveListItem,
   Turn,
+  TurnOrchestrationOutput,
   TurnDraftState,
   TurnJob
 } from "@fantasy-world/shared";
@@ -500,7 +501,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(updated);
   }
 
-  createTurnJob(saveId: string, input: CreateTurnInput): TurnJob | undefined {
+  createTurnJob(saveId: string, input: CreateTurnInput, orchestration?: TurnOrchestrationOutput): TurnJob | undefined {
     const save = this.saves.get(saveId);
 
     if (!save) {
@@ -508,25 +509,35 @@ export class PrototypeStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = [...this.turnJobs.values()].find(
-        (job) => job.saveId === saveId && job.idempotencyKey === input.idempotencyKey
-      );
+      const existing = this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
 
       if (existing) {
-        return structuredClone(existing);
+        return existing;
       }
     }
 
-    const active = [...this.turnJobs.values()].find((job) => job.saveId === saveId && isActiveJobStatus(job.status));
+    const active = this.getActiveTurnJob(saveId);
 
     if (active) {
-      return structuredClone(active);
+      return active;
     }
 
-    const { job } = buildTurnDraft(save, input, this.modelConfig.model);
+    const { job } = buildTurnDraft(save, input, this.modelConfig.model, undefined, undefined, orchestration);
     this.turnJobs.set(job.id, job);
 
     return structuredClone(job);
+  }
+
+  getTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): TurnJob | undefined {
+    const job = [...this.turnJobs.values()].find(
+      (item) => item.saveId === saveId && item.idempotencyKey === idempotencyKey
+    );
+    return job ? structuredClone(job) : undefined;
+  }
+
+  getActiveTurnJob(saveId: string): TurnJob | undefined {
+    const job = [...this.turnJobs.values()].find((item) => item.saveId === saveId && isActiveJobStatus(item.status));
+    return job ? structuredClone(job) : undefined;
   }
 
   patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined {
@@ -857,10 +868,10 @@ export function buildTurnDraft(
   input: CreateTurnInput,
   model: string,
   jobId = id("turn_job"),
-  idempotencyKey = input.idempotencyKey
+  idempotencyKey = input.idempotencyKey,
+  orchestration = createTurnOrchestration(save, input)
 ) {
   const turnNumber = save.turnNumber + 1;
-  const orchestration = createTurnOrchestration(save, input);
   const event =
     orchestration.focus.locationId !== undefined
       ? {

@@ -28,6 +28,7 @@ import {
   SaveListItemSchema,
   SaveSchema,
   SessionSchema,
+  TurnOrchestrationOutputSchema,
   TurnJobSchema
 } from "@fantasy-world/shared";
 import Fastify, { type FastifyError } from "fastify";
@@ -36,9 +37,15 @@ import { verifyPassword } from "./auth/password.js";
 import type { AppEnv } from "./config/env.js";
 import { createSaveExport, normalizeSaveImport } from "./import-export.js";
 import { LlmService } from "./llm/service.js";
+import {
+  buildTurnGenerationSystemPrompt,
+  buildTurnGenerationUserPrompt,
+  validateTurnGenerationOutput
+} from "./llm/turn-generation.js";
 import { buildWorldGenerationSystemPrompt, buildWorldGenerationUserPrompt } from "./llm/world-generation.js";
 import { buildGeneratedWorldDraft, prototypeStore } from "./store/prototype-store.js";
 import type { FantasyWorldStore } from "./store/types.js";
+import { createTurnOrchestration } from "./turn/orchestrator.js";
 
 const ParamsWithIdSchema = Type.Object({ id: Type.String() });
 const GenerationParamsSchema = Type.Object({ id: Type.String() });
@@ -704,12 +711,55 @@ export function buildApp(options: BuildAppOptions) {
         body: CreateTurnInputSchema,
         response: {
           201: TurnJobSchema,
-          404: ApiErrorSchema
+          404: ApiErrorSchema,
+          502: ApiErrorSchema
         }
       }
     },
     async (request, reply) => {
-      const job = await store.createTurnJob(request.params.id, request.body);
+      const save = await store.getSave(request.params.id);
+
+      if (!save) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
+      if (request.body.idempotencyKey) {
+        const existing = await store.getTurnJobByIdempotencyKey(request.params.id, request.body.idempotencyKey);
+
+        if (existing) {
+          reply.code(201);
+          return existing;
+        }
+      }
+
+      const active = await store.getActiveTurnJob(request.params.id);
+
+      if (active) {
+        reply.code(201);
+        return active;
+      }
+
+      const orchestration = await llmService.generateJson({
+        schema: TurnOrchestrationOutputSchema,
+        schemaName: "TurnOrchestrationOutput",
+        systemPrompt: buildTurnGenerationSystemPrompt(),
+        userPrompt: buildTurnGenerationUserPrompt(save, request.body),
+        mockOutput: createTurnOrchestration(save, request.body),
+        temperature: 0.65,
+        maxTokens: 4_000
+      });
+
+      if (!orchestration.ok) {
+        return sendError(reply, 502, orchestration.error.code, orchestration.error.message);
+      }
+
+      const referenceError = validateTurnGenerationOutput(save, orchestration.output);
+
+      if (referenceError) {
+        return sendError(reply, 502, "invalid_llm_reference", referenceError);
+      }
+
+      const job = await store.createTurnJob(request.params.id, request.body, orchestration.output);
 
       if (!job) {
         return sendError(reply, 404, "not_found", "Save not found");

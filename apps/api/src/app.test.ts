@@ -15,6 +15,7 @@ import type {
   SaveExport,
   SaveGenerationJob,
   SaveListItem,
+  TurnOrchestrationOutput,
   TurnJob
 } from "@fantasy-world/shared";
 
@@ -920,6 +921,305 @@ describe("FantasyWorld API prototype", () => {
 
     expect(saveAfterRetry.json<Save>().turns).toHaveLength(0);
     expect(saveAfterRetry.json<Save>().turnNumber).toBe(0);
+
+    await app.close();
+  });
+
+  it("uses structured LLM output for turn generation when a model API key is configured", async () => {
+    const store = new PrototypeStore();
+    let calls = 0;
+    let userPrompt = "";
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "turn-model",
+            hasApiKey: true,
+            apiKeyTail: "alue"
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson(_input, request) {
+        calls += 1;
+        userPrompt = request.userPrompt;
+
+        const focus = sourceSave.characters[0]!;
+        const location = sourceSave.locations[0]!;
+        const relationship = sourceSave.relationships[0];
+        const output: TurnOrchestrationOutput = {
+          focus: {
+            characterIds: [focus.id],
+            locationId: location.id,
+            conflict: "灯塔发出异常信号",
+            gmInstruction: "让灯塔发出异常信号"
+          },
+          characterPlans: [
+            {
+              characterId: focus.id,
+              intention: "确认信号是否来自旧王国的密令",
+              action: "登上灯塔并截住守灯人的证词",
+              referencedGoal: focus.shortTermGoal,
+              referencedMemory: focus.privateMemory[0] ?? "初始记忆",
+              referencedSecret: focus.secrets[0] ?? "隐藏线索",
+              dialogue: "这不是普通的雾灯，我要知道是谁改了信号。"
+            }
+          ],
+          event: {
+            title: "LLM 推演的灯塔异动",
+            body: "真实模型分支让灯塔信号改变港口局势。",
+            dialogue: [
+              {
+                characterId: focus.id,
+                line: "这不是普通的雾灯，我要知道是谁改了信号。"
+              }
+            ]
+          },
+          stateChanges: [
+            {
+              targetType: "worldMemory",
+              field: "timeline",
+              before: `${sourceSave.worldMemory.timeline.length} entries`,
+              after: `${sourceSave.worldMemory.timeline.length + 1} entries`
+            },
+            {
+              targetType: "character",
+              targetId: focus.id,
+              field: "status",
+              before: focus.status,
+              after: "追查 LLM 灯塔信号"
+            }
+          ],
+          memoryUpdates: [
+            {
+              characterId: focus.id,
+              entry: "LLM 回合记忆：灯塔信号被人为改写。"
+            }
+          ],
+          relationshipUpdates: relationship
+            ? [
+                {
+                  relationshipId: relationship.id,
+                  strengthDelta: 4,
+                  summary: "LLM 回合让两人的互信围绕灯塔线索升温。"
+                }
+              ]
+            : [],
+          worldMemory: {
+            timelineEntry: "1. LLM 推演的灯塔异动：真实模型分支让灯塔信号改变港口局势。",
+            summaryDelta: "LLM 回合把灯塔异常信号加入世界局势。"
+          }
+        };
+
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output,
+          usage: {
+            inputTokens: 210,
+            outputTokens: 260,
+            totalTokens: 470
+          },
+          latencyMs: 2
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider)
+    });
+    const cookie = await login(app);
+    const sourceSave = await createAcceptedSave(app, cookie, "LLM 回合测试");
+    const save = sourceSave;
+    store.updateModelConfig({
+      model: "turn-model",
+      apiKey: "test-secret-api-key-value"
+    });
+    const payload = {
+      gmInstruction: "让灯塔发出异常信号",
+      idempotencyKey: "llm-turn-generation"
+    };
+
+    const turn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload
+    });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload
+    });
+
+    expect(turn.statusCode).toBe(201);
+    expect(duplicate.statusCode).toBe(201);
+    expect(calls).toBe(1);
+    expect(userPrompt).toContain("让灯塔发出异常信号");
+    expect(userPrompt).toContain(save.characters[0]?.name);
+
+    const job = turn.json<TurnJob>();
+    const duplicateJob = duplicate.json<TurnJob>();
+    const turnId = job.turn?.id;
+
+    expect(duplicateJob.id).toBe(job.id);
+    expect(job.turn?.events[0]?.title).toBe("LLM 推演的灯塔异动");
+    expect(job.turn?.events[0]?.body).toContain("真实模型分支");
+    expect(job.turn?.events[0]?.dialogue?.[0]?.line).toContain("雾灯");
+    expect(job.draftState?.characterUpdates[0]?.privateMemory).toContain("LLM 回合记忆：灯塔信号被人为改写。");
+    expect(job.draftState?.relationshipUpdates[0]?.summary).toContain("LLM 回合");
+    expect(JSON.stringify(job)).not.toContain("test-secret-api-key-value");
+
+    if (!turnId) {
+      throw new Error("Missing LLM turn id");
+    }
+
+    const saveBeforeAccept = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(saveBeforeAccept.json<Save>().turns).toHaveLength(0);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/api/turns/${turnId}/accept`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(accepted.statusCode).toBe(200);
+    const acceptedSave = accepted.json<Save>();
+    expect(acceptedSave.turnNumber).toBe(1);
+    expect(acceptedSave.turns[0]?.events[0]?.title).toBe("LLM 推演的灯塔异动");
+    expect(acceptedSave.characters[0]?.privateMemory).toContain("LLM 回合记忆：灯塔信号被人为改写。");
+    expect(acceptedSave.relationships[0]?.summary).toContain("LLM 回合");
+    expect(acceptedSave.worldMemory.worldSummary).toContain("LLM 回合把灯塔异常信号加入世界局势");
+
+    await app.close();
+  });
+
+  it("rejects LLM turn drafts that reference unknown world IDs", async () => {
+    const store = new PrototypeStore();
+    let calls = 0;
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "turn-model",
+            hasApiKey: true,
+            apiKeyTail: "alue"
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson() {
+        calls += 1;
+
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output: {
+            focus: {
+              characterIds: ["character_missing"],
+              locationId: save.locations[0]?.id,
+              conflict: "模型编造了不存在的角色"
+            },
+            characterPlans: [
+              {
+                characterId: "character_missing",
+                intention: "推进不存在角色的目标",
+                action: "让不存在角色改变世界",
+                referencedGoal: "不存在的目标"
+              }
+            ],
+            event: {
+              title: "未知角色行动",
+              body: "模型返回了格式正确但引用不存在 ID 的回合。",
+              dialogue: [
+                {
+                  characterId: "character_missing",
+                  line: "我不应该进入正式世界。"
+                }
+              ]
+            },
+            stateChanges: [
+              {
+                targetType: "character",
+                targetId: "character_missing",
+                field: "status",
+                before: "missing",
+                after: "invalid"
+              }
+            ],
+            memoryUpdates: [
+              {
+                characterId: "character_missing",
+                entry: "不存在角色的记忆"
+              }
+            ],
+            relationshipUpdates: [],
+            worldMemory: {
+              timelineEntry: "1. 未知角色行动：模型返回了格式正确但引用不存在 ID 的回合。",
+              summaryDelta: "未知 ID 不应污染世界。"
+            }
+          },
+          latencyMs: 1
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider)
+    });
+    const cookie = await login(app);
+    const save = await createAcceptedSave(app, cookie, "坏回合测试");
+    store.updateModelConfig({
+      model: "turn-model",
+      apiKey: "test-secret-api-key-value"
+    });
+
+    const turn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "让模型返回坏结构",
+        idempotencyKey: "invalid-llm-turn"
+      }
+    });
+    const saveAfterFailure = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(turn.statusCode).toBe(502);
+    expect(turn.json<{ error: { code: string } }>().error.code).toBe("invalid_llm_reference");
+    expect(calls).toBe(1);
+    expect(saveAfterFailure.json<Save>().turns).toHaveLength(0);
+    expect(saveAfterFailure.json<Save>().turnNumber).toBe(0);
 
     await app.close();
   });
