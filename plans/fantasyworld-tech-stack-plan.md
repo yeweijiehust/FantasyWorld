@@ -204,7 +204,8 @@ FantasyWorld/
 - Render 使用 `render.yaml` 声明 Web Service、build/start 命令、数据库和环境变量占位。
 - 首次手动部署默认使用 Render Web Service `free` plan 和 Render Postgres `free`
   plan；后续数据量、备份、可用性或性能需要提升时再手动升级对应 plan。
-- Render build command 直接执行 `pnpm install --frozen-lockfile && pnpm build`；不要在 Render build command 中执行
+- Render build command 直接执行
+  `pnpm install --frozen-lockfile --prod=false && pnpm build && pnpm check:render`；不要在 Render build command 中执行
   `corepack enable`，避免尝试修改只读系统路径导致构建失败。
 - Render free Web Service 不支持 `preDeployCommand`；首版把 `pnpm db:migrate` 串进
   `startCommand`，再启动 API。升级到支持 pre-deploy 的层级后，可以再把迁移移回部署前命令。

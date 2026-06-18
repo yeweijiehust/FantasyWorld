@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24.0.0",
+    "node": ">=24.0.0 <25",
     "pnpm": ">=10.0.0"
   },
   "scripts": {
@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "test": "pnpm -r --if-present test",
     "test:e2e": "playwright test",
+    "check:render": "node scripts/check-render-build.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @fantasy-world/api db:generate",

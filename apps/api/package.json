@@ -9,7 +9,7 @@
     "dev:e2e": "pnpm --filter @fantasy-world/shared build && tsx watch scripts/dev-e2e.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "test": "pnpm --filter @fantasy-world/shared build && vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
