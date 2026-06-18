@@ -1,6 +1,8 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { buildApp } from "./app.js";
+import { buildApp, requiresSession } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { createDatabaseStore } from "./db/client.js";
 import { LlmService } from "./llm/service.js";
@@ -104,6 +106,45 @@ describe("environment validation", () => {
 });
 
 describe("FantasyWorld API auth and model config safety", () => {
+  it("keeps the production shell public while protecting game APIs", () => {
+    expect(requiresSession("/")).toBe(false);
+    expect(requiresSession("/assets/index.js")).toBe(false);
+    expect(requiresSession("/worlds/demo")).toBe(false);
+    expect(requiresSession("/api/health")).toBe(false);
+    expect(requiresSession("/api/auth/session")).toBe(false);
+    expect(requiresSession("/api/saves")).toBe(true);
+    expect(requiresSession("/api/model-config?tab=model")).toBe(true);
+  });
+
+  it("serves the production shell without a session while keeping APIs protected", async () => {
+    const webDistPath = path.resolve(process.cwd(), "../web/dist");
+    mkdirSync(webDistPath, { recursive: true });
+    writeFileSync(path.join(webDistPath, "index.html"), "<!doctype html><title>FantasyWorld</title>", "utf8");
+
+    const app = buildApp({ env: loadEnv(productionEnv), store: new PrototypeStore() });
+
+    const shell = await app.inject({
+      method: "GET",
+      url: "/"
+    });
+    expect(shell.statusCode).toBe(200);
+    expect(shell.payload).toContain("FantasyWorld");
+
+    const head = await app.inject({
+      method: "HEAD",
+      url: "/"
+    });
+    expect(head.statusCode).toBe(200);
+
+    const protectedApi = await app.inject({
+      method: "GET",
+      url: "/api/saves"
+    });
+    expect(protectedApi.statusCode).toBe(401);
+
+    await app.close();
+  });
+
   it("rejects unauthorized requests, bad passwords, and logged-out sessions", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
 
