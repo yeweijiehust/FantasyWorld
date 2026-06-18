@@ -55,6 +55,10 @@ export const api = {
     request<ModelConfig>("/api/model-config", { method: "PUT", body }),
   probeModelConfig: (body: ModelProbeInput) =>
     request<ModelProbeResult>("/api/model-config/probe", { method: "POST", body }),
+  saveModelConfig: (id: string) => request<ModelConfig>(`/api/saves/${id}/model-config`),
+  updateSaveModelConfig: (id: string, body: Partial<ModelConfig> & { apiKey?: string }) =>
+    request<Save>(`/api/saves/${id}/model-config`, { method: "PUT", body }),
+  clearSaveModelConfig: (id: string) => request<Save>(`/api/saves/${id}/model-config`, { method: "DELETE" }),
   saves: () => request<SaveListItem[]>("/api/saves"),
   save: (id: string) => request<Save>(`/api/saves/${id}`),
   patchSave: (id: string, body: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>) =>

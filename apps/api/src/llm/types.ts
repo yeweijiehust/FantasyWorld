@@ -1,6 +1,6 @@
 import type { ModelConfig, ModelProbeInput, ModelProbeResult } from "@fantasy-world/shared";
 import type { TSchema } from "typebox";
-import type { ModelCredentials } from "../store/types.js";
+import type { ModelCredentials, ModelCredentialsScope } from "../store/types.js";
 
 export type LlmProbeRequest = ModelProbeInput & {
   stored: ModelCredentials;
@@ -28,6 +28,8 @@ export type LlmJsonRequest<T extends TSchema = TSchema> = {
   systemPrompt: string;
   userPrompt: string;
   mockOutput: unknown;
+  saveId?: string;
+  modelOverride?: ModelCredentialsScope["modelOverride"];
   temperature?: number;
   maxTokens?: number;
 };

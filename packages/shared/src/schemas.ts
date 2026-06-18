@@ -103,6 +103,18 @@ export const ModelConfigSchema = Type.Object({
 });
 export type ModelConfig = Static<typeof ModelConfigSchema>;
 
+export const ModelConfigUpdateSchema = Type.Partial(
+  Type.Object({
+    baseUrl: Type.String(),
+    model: Type.String(),
+    apiKey: Type.String(),
+    supportsJsonMode: Type.Boolean(),
+    supportsUsage: Type.Boolean(),
+    supportsStream: Type.Boolean()
+  })
+);
+export type ModelConfigUpdate = Static<typeof ModelConfigUpdateSchema>;
+
 export const ModelProbeInputSchema = Type.Partial(
   Type.Object({
     baseUrl: Type.String(),
@@ -266,6 +278,7 @@ export const SaveSchema = Type.Object({
   turnNumber: Type.Number({ minimum: 0 }),
   saveSeed: Type.String(),
   settings: SaveSettingsSchema,
+  modelConfig: Type.Optional(ModelConfigSchema),
   worldMemory: WorldMemorySchema,
   characters: Type.Array(CharacterSchema),
   locations: Type.Array(LocationSchema),

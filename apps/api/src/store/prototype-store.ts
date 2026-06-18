@@ -11,6 +11,7 @@ import type {
   Location,
   LocationPatch,
   ModelConfig,
+  ModelConfigUpdate,
   CharacterPatch,
   Relationship,
   RelationshipPatch,
@@ -25,7 +26,7 @@ import type {
 } from "@fantasy-world/shared";
 import { CURRENT_SAVE_SCHEMA_VERSION, getWorldTemplate } from "@fantasy-world/shared";
 import { clampRelationshipStrength, createTurnOrchestration } from "../turn/orchestrator.js";
-import type { FantasyWorldStore, ModelCredentials } from "./types.js";
+import type { FantasyWorldStore, ModelCredentials, ModelCredentialsScope } from "./types.js";
 
 export const now = () => new Date().toISOString();
 export const id = (prefix: string) => `${prefix}_${crypto.randomUUID()}`;
@@ -40,12 +41,56 @@ export const defaultModelConfig: ModelConfig = {
 };
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
+export function publicSaveModelConfig(input: ModelConfig): ModelConfig {
+  const next: ModelConfig = {
+    ...input,
+    hasApiKey: false
+  };
+
+  delete next.apiKeyTail;
+  return next;
+}
+
+export function mergeModelCredentials(
+  globalCredentials: ModelCredentials,
+  saveConfig?: ModelConfig,
+  saveApiKey?: string,
+  modelOverride?: ModelCredentialsScope["modelOverride"]
+): ModelCredentials {
+  const merged: ModelCredentials = {
+    ...globalCredentials,
+    ...(saveConfig ?? {}),
+    ...(modelOverride ?? {})
+  };
+
+  if (saveApiKey) {
+    merged.apiKey = saveApiKey;
+    merged.hasApiKey = true;
+    merged.apiKeyTail = saveApiKey.slice(-4);
+  } else if (globalCredentials.apiKey) {
+    merged.apiKey = globalCredentials.apiKey;
+    merged.hasApiKey = true;
+    if (globalCredentials.apiKeyTail) {
+      merged.apiKeyTail = globalCredentials.apiKeyTail;
+    } else {
+      delete merged.apiKeyTail;
+    }
+  } else {
+    delete merged.apiKey;
+    merged.hasApiKey = false;
+    delete merged.apiKeyTail;
+  }
+
+  return merged;
+}
+
 export class PrototypeStore implements FantasyWorldStore {
   private readonly saves = new Map<string, Save>();
   private readonly generationJobs = new Map<string, SaveGenerationJob>();
   private readonly turnJobs = new Map<string, TurnJob>();
   private readonly rollbackSnapshots = new Map<string, Save[]>();
   private readonly sessions = new Map<string, number>();
+  private readonly saveModelApiKeys = new Map<string, string>();
   private modelConfig: ModelConfig = defaultModelConfig;
   private modelApiKey: string | undefined;
 
@@ -82,7 +127,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(this.modelConfig);
   }
 
-  getModelCredentials() {
+  getModelCredentials(scope: Parameters<FantasyWorldStore["getModelCredentials"]>[0] = {}) {
     const credentials: ModelCredentials = {
       ...this.modelConfig
     };
@@ -91,10 +136,13 @@ export class PrototypeStore implements FantasyWorldStore {
       credentials.apiKey = this.modelApiKey;
     }
 
-    return structuredClone(credentials);
+    const saveConfig = scope.saveId ? this.saves.get(scope.saveId)?.modelConfig : undefined;
+    const saveApiKey = scope.saveId ? this.saveModelApiKeys.get(scope.saveId) : undefined;
+
+    return structuredClone(mergeModelCredentials(credentials, saveConfig, saveApiKey, scope.modelOverride));
   }
 
-  updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }) {
+  updateModelConfig(input: ModelConfigUpdate) {
     const { apiKey, ...modelInput } = input;
     const cleanApiKey = apiKey?.trim();
     const next: ModelConfig = {
@@ -116,6 +164,65 @@ export class PrototypeStore implements FantasyWorldStore {
     this.modelConfig = next;
 
     return this.getModelConfig();
+  }
+
+  getSaveModelConfig(saveId: string): ModelConfig | undefined {
+    return structuredClone(this.saves.get(saveId)?.modelConfig);
+  }
+
+  updateSaveModelConfig(saveId: string, input: ModelConfigUpdate): Save | undefined {
+    const save = this.saves.get(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const { apiKey, ...modelInput } = input;
+    const cleanApiKey = apiKey?.trim();
+    const current = save.modelConfig ?? publicSaveModelConfig(this.modelConfig);
+    const next: ModelConfig = {
+      ...current,
+      ...modelInput,
+      hasApiKey: Boolean(cleanApiKey) || this.saveModelApiKeys.has(saveId),
+      supportsJsonMode: modelInput.supportsJsonMode ?? current.supportsJsonMode ?? true,
+      supportsUsage: modelInput.supportsUsage ?? current.supportsUsage ?? true,
+      supportsStream: modelInput.supportsStream ?? current.supportsStream ?? false
+    };
+
+    if (cleanApiKey) {
+      this.saveModelApiKeys.set(saveId, cleanApiKey);
+      next.apiKeyTail = cleanApiKey.slice(-4);
+      next.hasApiKey = true;
+    } else if (!next.hasApiKey) {
+      delete next.apiKeyTail;
+    }
+
+    const updated = {
+      ...save,
+      modelConfig: next,
+      updatedAt: now()
+    };
+
+    this.saves.set(saveId, structuredClone(updated));
+    return structuredClone(updated);
+  }
+
+  clearSaveModelConfig(saveId: string): Save | undefined {
+    const save = this.saves.get(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    this.saveModelApiKeys.delete(saveId);
+    const updated: Save = {
+      ...save,
+      updatedAt: now()
+    };
+    delete updated.modelConfig;
+
+    this.saves.set(saveId, structuredClone(updated));
+    return structuredClone(updated);
   }
 
   listSaves(): SaveListItem[] {
@@ -567,7 +674,14 @@ export class PrototypeStore implements FantasyWorldStore {
       return active;
     }
 
-    const { job } = buildTurnDraft(save, input, this.modelConfig.model, undefined, undefined, orchestration);
+    const { job } = buildTurnDraft(
+      save,
+      input,
+      this.getModelCredentials({ saveId }).model,
+      undefined,
+      undefined,
+      orchestration
+    );
     this.turnJobs.set(job.id, job);
 
     return structuredClone(job);
@@ -706,7 +820,7 @@ export class PrototypeStore implements FantasyWorldStore {
     const { job: retried } = buildTurnDraft(
       save,
       job.input ?? {},
-      this.modelConfig.model,
+      this.getModelCredentials({ saveId: job.saveId }).model,
       job.id,
       job.idempotencyKey,
       orchestration
@@ -824,6 +938,7 @@ export function buildSave(input: CreateSaveInput, generatedDraft?: GeneratedWorl
     turnNumber: 0,
     saveSeed: id("seed"),
     settings: input.settings,
+    ...saveModelConfigFromInput(input),
     worldMemory: {
       timeline: [],
       worldSummary: premise,
@@ -884,6 +999,19 @@ export function buildGeneratedWorldDraft(input: CreateSaveInput): GeneratedWorld
   };
 }
 
+function saveModelConfigFromInput(input: CreateSaveInput): { modelConfig?: ModelConfig } {
+  if (!input.modelOverride?.baseUrl && !input.modelOverride?.model) {
+    return {};
+  }
+
+  return {
+    modelConfig: {
+      ...publicSaveModelConfig(defaultModelConfig),
+      ...input.modelOverride
+    }
+  };
+}
+
 function buildGeneratedSave(input: CreateSaveInput, generatedDraft: GeneratedWorldDraft): Save {
   const createdAt = now();
   const locationDrafts = generatedDraft.locations.slice(0, 5);
@@ -937,6 +1065,7 @@ function buildGeneratedSave(input: CreateSaveInput, generatedDraft: GeneratedWor
     turnNumber: 0,
     saveSeed: id("seed"),
     settings: input.settings,
+    ...saveModelConfigFromInput(input),
     worldMemory: {
       timeline: [],
       worldSummary: generatedDraft.worldSummary,

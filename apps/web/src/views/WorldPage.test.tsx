@@ -26,6 +26,9 @@ const apiMock = vi.hoisted(() => ({
   cancelTurnJob: vi.fn(),
   retryTurnJob: vi.fn(),
   patchTurnDraft: vi.fn(),
+  saveModelConfig: vi.fn(),
+  updateSaveModelConfig: vi.fn(),
+  clearSaveModelConfig: vi.fn(),
   patchSave: vi.fn(),
   patchCharacter: vi.fn(),
   createCharacter: vi.fn(),
@@ -156,6 +159,8 @@ describe("WorldPage", () => {
     useUiStore.setState({ selectedSaveId: undefined, uiLanguage: "en" });
     apiMock.saves.mockResolvedValue([]);
     apiMock.save.mockResolvedValue(makeSave());
+    apiMock.updateSaveModelConfig.mockResolvedValue(makeSave());
+    apiMock.clearSaveModelConfig.mockResolvedValue(makeSave());
   });
 
   it("renders the create wizard and keeps world language separate from UI language", async () => {
@@ -193,6 +198,48 @@ describe("WorldPage", () => {
     expect(screen.getAllByText("World settings").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Save character" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Add relationship" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Save model").length).toBeGreaterThan(0);
+  });
+
+  it("saves a model override for the selected save", async () => {
+    const save = makeSave();
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    apiMock.saves.mockResolvedValue([item]);
+    apiMock.save.mockResolvedValue(save);
+    apiMock.updateSaveModelConfig.mockResolvedValue({
+      ...save,
+      modelConfig: {
+        baseUrl: "https://save-model.example.test/v1",
+        model: "save-model",
+        hasApiKey: true,
+        apiKeyTail: "alue"
+      }
+    });
+    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
+
+    renderWithClient();
+
+    expect(await screen.findByRole("heading", { name: "Test World" })).toBeInTheDocument();
+    await userEvent.type(screen.getAllByLabelText("Save model base URL")[0]!, "https://save-model.example.test/v1");
+    await userEvent.type(screen.getAllByLabelText("Save model")[0]!, "save-model");
+    await userEvent.type(screen.getAllByLabelText("Save model API key")[0]!, "save-secret-api-key-value");
+    await userEvent.click(screen.getAllByRole("button", { name: "Save model config" })[0]!);
+
+    await waitFor(() =>
+      expect(apiMock.updateSaveModelConfig).toHaveBeenCalledWith("save_1", {
+        baseUrl: "https://save-model.example.test/v1",
+        model: "save-model",
+        apiKey: "save-secret-api-key-value"
+      })
+    );
   });
 
   it("shows failed turn jobs with recovery controls", async () => {

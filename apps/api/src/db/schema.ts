@@ -8,6 +8,8 @@ export const saves = pgTable("saves", {
   turnNumber: integer("turn_number").notNull(),
   saveSeed: text("save_seed").notNull(),
   settings: jsonb("settings").notNull(),
+  modelConfig: jsonb("model_config"),
+  modelApiKeyCiphertext: text("model_api_key_ciphertext"),
   worldMemory: jsonb("world_memory").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()

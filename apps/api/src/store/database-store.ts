@@ -14,6 +14,7 @@ import {
   type Location,
   type LocationPatch,
   type ModelConfig,
+  type ModelConfigUpdate,
   type PatchTurnDraftInput,
   type Relationship,
   type RelationshipPatch,
@@ -35,10 +36,12 @@ import {
   defaultModelConfig,
   id,
   isActiveJobStatus,
+  mergeModelCredentials,
   now,
-  patchTurnJobDraft
+  patchTurnJobDraft,
+  publicSaveModelConfig
 } from "./prototype-store.js";
-import type { FantasyWorldStore, ModelCredentials } from "./types.js";
+import type { FantasyWorldStore, ModelCredentials, ModelCredentialsScope } from "./types.js";
 
 type Database = NodePgDatabase<typeof dbSchema>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -98,28 +101,33 @@ export class DatabaseStore implements FantasyWorldStore {
     });
   }
 
-  async getModelCredentials(): Promise<ModelCredentials> {
+  async getModelCredentials(scope: ModelCredentialsScope = {}): Promise<ModelCredentials> {
     const row = await this.db.query.modelConfigs.findFirst({
       where: eq(dbSchema.modelConfigs.id, modelConfigId)
     });
+    const config = row ? await this.getModelConfig() : structuredClone(defaultModelConfig);
+    const credentials: ModelCredentials = { ...config };
 
-    if (!row) {
-      return structuredClone(defaultModelConfig);
-    }
-
-    const config = await this.getModelConfig();
-    const credentials: ModelCredentials = {
-      ...config
-    };
-
-    if (row.apiKeyCiphertext) {
+    if (row?.apiKeyCiphertext) {
       credentials.apiKey = decryptSecret(row.apiKeyCiphertext, this.encryptionKey);
     }
 
-    return structuredClone(credentials);
+    const save = scope.saveId
+      ? await this.db.query.saves.findFirst({
+          where: eq(dbSchema.saves.id, scope.saveId)
+        })
+      : undefined;
+    const saveConfig = save?.modelConfig
+      ? normalizeSaveModelConfig(save.modelConfig as ModelConfig, Boolean(save.modelApiKeyCiphertext))
+      : undefined;
+    const saveApiKey = save?.modelApiKeyCiphertext
+      ? decryptSecret(save.modelApiKeyCiphertext, this.encryptionKey)
+      : undefined;
+
+    return structuredClone(mergeModelCredentials(credentials, saveConfig, saveApiKey, scope.modelOverride));
   }
 
-  async updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): Promise<ModelConfig> {
+  async updateModelConfig(input: ModelConfigUpdate): Promise<ModelConfig> {
     const existing = await this.db.query.modelConfigs.findFirst({
       where: eq(dbSchema.modelConfigs.id, modelConfigId)
     });
@@ -157,6 +165,87 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     return this.getModelConfig();
+  }
+
+  async getSaveModelConfig(saveId: string): Promise<ModelConfig | undefined> {
+    const row = await this.db.query.saves.findFirst({
+      where: eq(dbSchema.saves.id, saveId)
+    });
+
+    if (!row?.modelConfig) {
+      return undefined;
+    }
+
+    return structuredClone(
+      normalizeSaveModelConfig(row.modelConfig as ModelConfig, Boolean(row.modelApiKeyCiphertext))
+    );
+  }
+
+  async updateSaveModelConfig(saveId: string, input: ModelConfigUpdate): Promise<Save | undefined> {
+    const current = await this.readSave(saveId);
+
+    if (!current) {
+      return undefined;
+    }
+
+    const row = await this.db.query.saves.findFirst({
+      where: eq(dbSchema.saves.id, saveId)
+    });
+    const { apiKey, ...modelInput } = input;
+    const cleanApiKey = apiKey?.trim();
+    const base = current.modelConfig ?? publicSaveModelConfig(await this.getModelConfig());
+    const apiKeyCiphertext = cleanApiKey ? encryptSecret(cleanApiKey, this.encryptionKey) : row?.modelApiKeyCiphertext;
+    const nextModelConfig: ModelConfig = normalizeSaveModelConfig(
+      {
+        ...base,
+        ...modelInput,
+        hasApiKey: Boolean(cleanApiKey) || Boolean(apiKeyCiphertext),
+        supportsJsonMode: modelInput.supportsJsonMode ?? base.supportsJsonMode ?? true,
+        supportsUsage: modelInput.supportsUsage ?? base.supportsUsage ?? true,
+        supportsStream: modelInput.supportsStream ?? base.supportsStream ?? false
+      },
+      Boolean(apiKeyCiphertext)
+    );
+
+    if (cleanApiKey) {
+      nextModelConfig.apiKeyTail = cleanApiKey.slice(-4);
+    }
+
+    const updated: Save = {
+      ...current,
+      modelConfig: nextModelConfig,
+      updatedAt: now()
+    };
+
+    await this.db
+      .update(dbSchema.saves)
+      .set({
+        modelConfig: nextModelConfig,
+        modelApiKeyCiphertext: apiKeyCiphertext ?? null,
+        updatedAt: new Date(updated.updatedAt)
+      })
+      .where(eq(dbSchema.saves.id, saveId));
+
+    return this.readSave(saveId);
+  }
+
+  async clearSaveModelConfig(saveId: string): Promise<Save | undefined> {
+    const current = await this.readSave(saveId);
+
+    if (!current) {
+      return undefined;
+    }
+
+    await this.db
+      .update(dbSchema.saves)
+      .set({
+        modelConfig: null,
+        modelApiKeyCiphertext: null,
+        updatedAt: new Date()
+      })
+      .where(eq(dbSchema.saves.id, saveId));
+
+    return this.readSave(saveId);
   }
 
   async listSaves(): Promise<SaveListItem[]> {
@@ -653,7 +742,7 @@ export class DatabaseStore implements FantasyWorldStore {
     const { job } = buildTurnDraft(
       save,
       input,
-      (await this.getModelConfig()).model,
+      (await this.getModelCredentials({ saveId })).model,
       undefined,
       undefined,
       orchestration
@@ -840,7 +929,7 @@ export class DatabaseStore implements FantasyWorldStore {
     const { job: retried } = buildTurnDraft(
       save,
       job.input ?? {},
-      (await this.getModelConfig()).model,
+      (await this.getModelCredentials({ saveId: job.saveId })).model,
       job.id,
       job.idempotencyKey,
       orchestration
@@ -996,6 +1085,11 @@ export class DatabaseStore implements FantasyWorldStore {
       turnNumber: save.turnNumber,
       saveSeed: save.saveSeed,
       settings: structuredClone(save.settings as Save["settings"]),
+      ...(save.modelConfig
+        ? {
+            modelConfig: normalizeSaveModelConfig(save.modelConfig as ModelConfig, Boolean(save.modelApiKeyCiphertext))
+          }
+        : {}),
       worldMemory: structuredClone(save.worldMemory as WorldMemory),
       characters: characters.map((row) => structuredClone(row.data as Character)),
       locations: locations.map((row) => structuredClone(row.data as Location)),
@@ -1015,6 +1109,8 @@ export class DatabaseStore implements FantasyWorldStore {
       turnNumber: save.turnNumber,
       saveSeed: save.saveSeed,
       settings: save.settings,
+      modelConfig: save.modelConfig ? normalizeSaveModelConfig(save.modelConfig, false) : null,
+      modelApiKeyCiphertext: null,
       worldMemory: save.worldMemory,
       createdAt: new Date(save.createdAt),
       updatedAt: new Date(save.updatedAt)
@@ -1040,6 +1136,7 @@ export class DatabaseStore implements FantasyWorldStore {
         turnNumber: save.turnNumber,
         saveSeed: save.saveSeed,
         settings: save.settings,
+        modelConfig: save.modelConfig ?? null,
         worldMemory: save.worldMemory,
         updatedAt: new Date(save.updatedAt)
       })
@@ -1193,6 +1290,19 @@ function remapImportedSave(input: Save): Save {
     createdAt: now(),
     updatedAt: now()
   };
+}
+
+function normalizeSaveModelConfig(input: ModelConfig, hasApiKey: boolean): ModelConfig {
+  const next: ModelConfig = {
+    ...input,
+    hasApiKey
+  };
+
+  if (!hasApiKey) {
+    delete next.apiKeyTail;
+  }
+
+  return next;
 }
 
 function buildSnapshotBeforeTurn(save: Save, turn: Turn): Save {

@@ -27,7 +27,10 @@ export class LlmService {
   }
 
   async generateJson<T extends TSchema>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<Static<T>>> {
-    const credentials = await this.store.getModelCredentials();
+    const credentials = await this.store.getModelCredentials({
+      ...(request.saveId ? { saveId: request.saveId } : {}),
+      ...(request.modelOverride ? { modelOverride: request.modelOverride } : {})
+    });
     const provider = credentials.apiKey ? this.openAiProvider : this.mockProvider;
     const result = await provider.generateJson(credentials, request);
 

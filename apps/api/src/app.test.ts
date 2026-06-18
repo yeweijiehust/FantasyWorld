@@ -234,6 +234,164 @@ describe("FantasyWorld API auth and model config safety", () => {
     await app.close();
   });
 
+  it("uses save-level model overrides before global model credentials", async () => {
+    const store = new PrototypeStore();
+    const seenCredentials: Array<{ model: string; apiKey?: string }> = [];
+    const openAiProvider: LlmProvider = {
+      probe(input) {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: input.baseUrl,
+            model: input.model,
+            hasApiKey: Boolean(input.apiKey),
+            ...(input.apiKey ? { apiKeyTail: input.apiKey.slice(-4) } : {})
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson(input, request) {
+        seenCredentials.push({
+          model: input.model,
+          ...(input.apiKey ? { apiKey: input.apiKey } : {})
+        });
+
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output: request.mockOutput,
+          latencyMs: 1
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider)
+    });
+    const cookie = await login(app);
+    const firstSave = await createAcceptedSave(app, cookie, "模型覆盖甲");
+    const secondSave = await createAcceptedSave(app, cookie, "模型覆盖乙");
+    const globalApiKey = "global-secret-api-key-value";
+    const saveApiKey = "save-secret-api-key-value";
+
+    const globalConfig = await app.inject({
+      method: "PUT",
+      url: "/api/model-config",
+      headers: {
+        cookie
+      },
+      payload: {
+        baseUrl: "https://global.example.test/v1",
+        model: "global-model",
+        apiKey: globalApiKey
+      }
+    });
+    const firstOverride = await app.inject({
+      method: "PUT",
+      url: `/api/saves/${firstSave.id}/model-config`,
+      headers: {
+        cookie
+      },
+      payload: {
+        baseUrl: "https://save.example.test/v1",
+        model: "save-model-a",
+        apiKey: saveApiKey
+      }
+    });
+    const secondOverride = await app.inject({
+      method: "PUT",
+      url: `/api/saves/${secondSave.id}/model-config`,
+      headers: {
+        cookie
+      },
+      payload: {
+        model: "save-model-b"
+      }
+    });
+
+    expect(globalConfig.statusCode).toBe(200);
+    expect(firstOverride.statusCode).toBe(200);
+    expect(secondOverride.statusCode).toBe(200);
+    expect(firstOverride.json<Save>().modelConfig?.model).toBe("save-model-a");
+    expect(firstOverride.json<Save>().modelConfig?.apiKeyTail).toBe("alue");
+    expect(secondOverride.json<Save>().modelConfig?.model).toBe("save-model-b");
+    expect(secondOverride.json<Save>().modelConfig?.hasApiKey).toBe(false);
+    expect(JSON.stringify(firstOverride.json())).not.toContain(saveApiKey);
+
+    const firstTurn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${firstSave.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        idempotencyKey: "save-model-a-turn"
+      }
+    });
+    const secondTurn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${secondSave.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        idempotencyKey: "save-model-b-turn"
+      }
+    });
+
+    expect(firstTurn.statusCode).toBe(201);
+    expect(secondTurn.statusCode).toBe(201);
+    expect(seenCredentials.at(-2)).toEqual({ model: "save-model-a", apiKey: saveApiKey });
+    expect(seenCredentials.at(-1)).toEqual({ model: "save-model-b", apiKey: globalApiKey });
+    expect(firstTurn.json<TurnJob>().turn?.callSummary.model).toBe("save-model-a");
+    expect(secondTurn.json<TurnJob>().turn?.callSummary.model).toBe("save-model-b");
+
+    await app.inject({
+      method: "POST",
+      url: `/api/turn-jobs/${firstTurn.json<TurnJob>().id}/cancel`,
+      headers: {
+        cookie
+      }
+    });
+
+    const cleared = await app.inject({
+      method: "DELETE",
+      url: `/api/saves/${firstSave.id}/model-config`,
+      headers: {
+        cookie
+      }
+    });
+    const fallback = await app.inject({
+      method: "GET",
+      url: `/api/saves/${firstSave.id}/model-config`,
+      headers: {
+        cookie
+      }
+    });
+    const fallbackTurn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${firstSave.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        idempotencyKey: "save-model-global-turn"
+      }
+    });
+
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json<Save>().modelConfig).toBeUndefined();
+    expect(fallback.json<ModelConfig>().model).toBe("global-model");
+    expect(fallbackTurn.statusCode).toBe(201);
+    expect(seenCredentials.at(-1)).toEqual({ model: "global-model", apiKey: globalApiKey });
+    expect(JSON.stringify(fallbackTurn.json())).not.toContain(globalApiKey);
+    expect(JSON.stringify(fallbackTurn.json())).not.toContain(saveApiKey);
+
+    await app.close();
+  });
+
   it("probes mock models without a real API key", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
     const cookie = await login(app);
@@ -1972,6 +2130,42 @@ describeDb("FantasyWorld API database persistence", () => {
       await pool.end();
     }
 
+    const saveApiKey = "test-save-secret-api-key-value";
+    const saveModelConfig = await firstApp.inject({
+      method: "PUT",
+      url: `/api/saves/${save.id}/model-config`,
+      headers: {
+        cookie
+      },
+      payload: {
+        baseUrl: "https://save-models.example.test/v1",
+        model: "db-save-model",
+        apiKey: saveApiKey
+      }
+    });
+
+    expect(saveModelConfig.statusCode).toBe(200);
+    expect(saveModelConfig.json<Save>().modelConfig?.model).toBe("db-save-model");
+    expect(saveModelConfig.json<Save>().modelConfig?.hasApiKey).toBe(true);
+    expect(saveModelConfig.json<Save>().modelConfig?.apiKeyTail).toBe("alue");
+    expect(JSON.stringify(saveModelConfig.json())).not.toContain(saveApiKey);
+
+    const saveModelPool = new Pool({ connectionString: databaseEnv.databaseUrl });
+
+    try {
+      const storedSaveConfig = await saveModelPool.query<{
+        model_config: ModelConfig | null;
+        model_api_key_ciphertext: string | null;
+      }>("select model_config, model_api_key_ciphertext from saves where id = $1", [save.id]);
+      const row = storedSaveConfig.rows[0];
+
+      expect(row?.model_api_key_ciphertext).toBeTypeOf("string");
+      expect(row?.model_config?.apiKeyTail).toBe("alue");
+      expect(JSON.stringify(row)).not.toContain(saveApiKey);
+    } finally {
+      await saveModelPool.end();
+    }
+
     const patched = await firstApp.inject({
       method: "PATCH",
       url: `/api/saves/${save.id}`,
@@ -2028,6 +2222,7 @@ describeDb("FantasyWorld API database persistence", () => {
     expect(turn.statusCode).toBe(201);
     const turnJob = turn.json<TurnJob>();
     const turnId = turnJob.turn?.id;
+    expect(turnJob.turn?.callSummary.model).toBe("db-save-model");
 
     if (!turnId) {
       throw new Error("Missing turn id");
@@ -2085,6 +2280,8 @@ describeDb("FantasyWorld API database persistence", () => {
     expect(exportedSave.turnNumber).toBe(1);
     expect(exportedSave.turns[0]?.status).toBe("accepted");
     expect(JSON.stringify(exportedPackage)).not.toContain(apiKey);
+    expect(JSON.stringify(exportedPackage)).not.toContain(saveApiKey);
+    expect(exportedSave.modelConfig?.apiKeyTail).toBe("alue");
 
     const rollback = await firstApp.inject({
       method: "POST",
@@ -2110,6 +2307,19 @@ describeDb("FantasyWorld API database persistence", () => {
     expect(imported.statusCode).toBe(201);
     expect(imported.json<Save>().id).not.toBe(save.id);
     expect(imported.json<Save>().turnNumber).toBe(1);
+    expect(imported.json<Save>().modelConfig?.hasApiKey).toBe(false);
+    expect(imported.json<Save>().modelConfig?.apiKeyTail).toBeUndefined();
+
+    const clearedModelConfig = await firstApp.inject({
+      method: "DELETE",
+      url: `/api/saves/${save.id}/model-config`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(clearedModelConfig.statusCode).toBe(200);
+    expect(clearedModelConfig.json<Save>().modelConfig).toBeUndefined();
 
     await firstApp.close();
     await firstRuntime.close();

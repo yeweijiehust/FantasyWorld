@@ -9,6 +9,7 @@ import type {
   JobFailure,
   LocationPatch,
   ModelConfig,
+  ModelConfigUpdate,
   PatchTurnDraftInput,
   RelationshipPatch,
   Save,
@@ -22,13 +23,23 @@ export type ModelCredentials = ModelConfig & {
   apiKey?: string;
 };
 
+export type ModelCredentialsScope = {
+  saveId?: string;
+  modelOverride?: Partial<
+    Pick<ModelConfig, "baseUrl" | "model" | "supportsJsonMode" | "supportsUsage" | "supportsStream">
+  >;
+};
+
 export type FantasyWorldStore = {
   createSession(): string | Promise<string>;
   hasSession(sessionId: string | undefined): boolean | Promise<boolean>;
   deleteSession(sessionId: string): void | Promise<void>;
   getModelConfig(): ModelConfig | Promise<ModelConfig>;
-  getModelCredentials(): ModelCredentials | Promise<ModelCredentials>;
-  updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): ModelConfig | Promise<ModelConfig>;
+  getModelCredentials(scope?: ModelCredentialsScope): ModelCredentials | Promise<ModelCredentials>;
+  updateModelConfig(input: ModelConfigUpdate): ModelConfig | Promise<ModelConfig>;
+  getSaveModelConfig(saveId: string): ModelConfig | undefined | Promise<ModelConfig | undefined>;
+  updateSaveModelConfig(saveId: string, input: ModelConfigUpdate): Save | undefined | Promise<Save | undefined>;
+  clearSaveModelConfig(saveId: string): Save | undefined | Promise<Save | undefined>;
   listSaves(): SaveListItem[] | Promise<SaveListItem[]>;
   getSave(saveId: string): Save | undefined | Promise<Save | undefined>;
   createGenerationJob(

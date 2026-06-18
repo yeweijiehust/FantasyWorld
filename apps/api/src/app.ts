@@ -21,6 +21,7 @@ import {
   type JobFailure,
   LocationPatchSchema,
   ModelConfigSchema,
+  ModelConfigUpdateSchema,
   ModelProbeInputSchema,
   ModelProbeResultSchema,
   PatchTurnDraftInputSchema,
@@ -60,15 +61,6 @@ const LocationParamsSchema = Type.Object({ id: Type.String(), locationId: Type.S
 const RelationshipParamsSchema = Type.Object({ id: Type.String(), relationshipId: Type.String() });
 const LoginBodySchema = Type.Object({
   password: Type.String()
-});
-
-const ModelConfigUpdateSchema = Type.Object({
-  baseUrl: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
-  apiKey: Type.Optional(Type.String()),
-  supportsJsonMode: Type.Optional(Type.Boolean()),
-  supportsUsage: Type.Optional(Type.Boolean()),
-  supportsStream: Type.Optional(Type.Boolean())
 });
 
 const SavePatchSchema = Type.Partial(
@@ -329,6 +321,63 @@ export function buildApp(options: BuildAppOptions) {
     async (request, reply) => {
       const save = await store.getSave(request.params.id);
       return save ? createSaveExport(save) : sendError(reply, 404, "not_found", "Save not found");
+    }
+  );
+
+  app.get(
+    "/api/saves/:id/model-config",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        response: {
+          200: ModelConfigSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.getSave(request.params.id);
+
+      if (!save) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
+      return (await store.getSaveModelConfig(request.params.id)) ?? (await store.getModelConfig());
+    }
+  );
+
+  app.put(
+    "/api/saves/:id/model-config",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        body: ModelConfigUpdateSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.updateSaveModelConfig(request.params.id, request.body);
+      return save ?? sendError(reply, 404, "not_found", "Save not found");
+    }
+  );
+
+  app.delete(
+    "/api/saves/:id/model-config",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        response: {
+          200: SaveSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const save = await store.clearSaveModelConfig(request.params.id);
+      return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
 
@@ -993,6 +1042,7 @@ function generateWorldDraft(llmService: LlmService, input: CreateSaveInput) {
     systemPrompt: buildWorldGenerationSystemPrompt(),
     userPrompt: buildWorldGenerationUserPrompt(input),
     mockOutput: buildGeneratedWorldDraft(input),
+    modelOverride: input.modelOverride,
     temperature: 0.7,
     maxTokens: 4_000
   });
@@ -1005,6 +1055,7 @@ async function generateTurnDraft(llmService: LlmService, save: Save, input: Crea
     systemPrompt: buildTurnGenerationSystemPrompt(),
     userPrompt: buildTurnGenerationUserPrompt(save, input),
     mockOutput: createTurnOrchestration(save, input),
+    saveId: save.id,
     temperature: 0.65,
     maxTokens: 4_000
   });

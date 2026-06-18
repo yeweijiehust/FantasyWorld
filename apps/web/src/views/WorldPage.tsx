@@ -1226,6 +1226,9 @@ function WorldSettingsEditor({ save }: { save: Save }) {
   const [randomness, setRandomness] = useState(save.settings.randomness);
   const [contentBoundary, setContentBoundary] = useState(save.settings.contentBoundary);
   const [styleGuide, setStyleGuide] = useState(save.settings.styleGuide);
+  const [modelBaseUrl, setModelBaseUrl] = useState(save.modelConfig?.baseUrl ?? "");
+  const [modelName, setModelName] = useState(save.modelConfig?.model ?? "");
+  const [modelApiKey, setModelApiKey] = useState("");
   const settings = useMutation({
     mutationFn: () =>
       api.patchSave(save.id, {
@@ -1238,6 +1241,43 @@ function WorldSettingsEditor({ save }: { save: Save }) {
         }
       }),
     onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const saveModel = useMutation({
+    mutationFn: () => {
+      const payload: Parameters<typeof api.updateSaveModelConfig>[1] = {};
+      const baseUrl = modelBaseUrl.trim();
+      const model = modelName.trim();
+      const apiKey = modelApiKey.trim();
+
+      if (baseUrl) {
+        payload.baseUrl = baseUrl;
+      }
+
+      if (model) {
+        payload.model = model;
+      }
+
+      if (apiKey) {
+        payload.apiKey = apiKey;
+      }
+
+      return api.updateSaveModelConfig(save.id, payload);
+    },
+    onSuccess: async () => {
+      setModelApiKey("");
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const clearModel = useMutation({
+    mutationFn: () => api.clearSaveModelConfig(save.id),
+    onSuccess: async () => {
+      setModelBaseUrl("");
+      setModelName("");
+      setModelApiKey("");
       await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
       await queryClient.invalidateQueries({ queryKey: ["saves"] });
     }
@@ -1297,6 +1337,65 @@ function WorldSettingsEditor({ save }: { save: Save }) {
         Save settings
       </button>
       {settings.error ? <p className="mt-2 text-sm text-red-600">{settings.error.message}</p> : null}
+      <div className="mt-5 border-t border-slate-200 pt-4">
+        <div className="mb-2 text-sm font-semibold text-slate-950">Save model config</div>
+        <div className="grid gap-2">
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            Base URL
+            <input
+              aria-label="Save model base URL"
+              className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+              value={modelBaseUrl}
+              onChange={(event) => setModelBaseUrl(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            Model
+            <input
+              aria-label="Save model"
+              className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+              value={modelName}
+              onChange={(event) => setModelName(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            API key
+            <input
+              aria-label="Save model API key"
+              className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+              type="password"
+              value={modelApiKey}
+              onChange={(event) => setModelApiKey(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          {save.modelConfig
+            ? `Override ${save.modelConfig.model}${save.modelConfig.hasApiKey && save.modelConfig.apiKeyTail ? ` · key ${save.modelConfig.apiKeyTail}` : ""}`
+            : "Global model config"}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            className="inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+            type="button"
+            disabled={saveModel.isPending}
+            onClick={() => saveModel.mutate()}
+          >
+            <SaveIcon size={14} />
+            Save model config
+          </button>
+          <button
+            className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 disabled:opacity-60"
+            type="button"
+            disabled={clearModel.isPending || !save.modelConfig}
+            onClick={() => clearModel.mutate()}
+          >
+            Clear model config
+          </button>
+        </div>
+        {saveModel.error ? <p className="mt-2 text-sm text-red-600">{saveModel.error.message}</p> : null}
+        {clearModel.error ? <p className="mt-2 text-sm text-red-600">{clearModel.error.message}</p> : null}
+      </div>
     </section>
   );
 }
