@@ -90,11 +90,16 @@
 - CI：
   - `.github/workflows/ci.yml` 是 required check，PR 必跑 install、typecheck、lint、unit/API tests、web build。
   - `ci.yml` 使用 GitHub Actions Postgres service container 跑迁移和 API/DB 测试。
+  - `ci.yml` 必须运行 `pnpm check:render`，防止 Render 生产启动路径、静态资源路径或免费层不支持的命令再次漂移。
   - `.github/workflows/security.yml` 检查依赖、lockfile 和公开仓库密钥泄漏风险。
   - GitHub 仓库应启用 secret scanning、push protection、dependency review 和 branch protection。
   - E2E 可先用于关键路径、发布前或高风险 PR。
   - `.github/workflows/e2e.yml` 默认手动触发，使用 mock LLM provider，不依赖真实 LLM key。
   - CI 失败不得 merge。
+- 发布前核对：
+  - v1 及之后每个可发布版本必须维护 release checklist，记录已实现范围、延期项、测试结果、部署状态和泄密检查结果。
+  - 生产 Web Service 必须验证公开前端 shell 可加载，非公开 `/api` 业务接口仍需鉴权，`/api/health` 可用于健康检查。
+  - Render 免费层不得使用 `preDeployCommand`；如果继续使用免费层，迁移命令必须在当前部署方案中有明确位置并被文档记录。
 
 ## Agent And Documentation Rules
 
