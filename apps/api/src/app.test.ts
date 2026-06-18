@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildApp, requiresSession } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { createDatabaseStore } from "./db/client.js";
+import { MockLlmProvider } from "./llm/mock-provider.js";
 import { LlmService } from "./llm/service.js";
 import type { LlmProvider } from "./llm/types.js";
 import { PrototypeStore } from "./store/prototype-store.js";
@@ -1773,7 +1774,12 @@ const describeDb = process.env.RUN_DB_TESTS === "1" ? describe : describe.skip;
 describeDb("FantasyWorld API database persistence", () => {
   it("persists saves, edits, turns, rollback snapshots, and imports", async () => {
     const firstRuntime = createDatabaseStore(databaseEnv.databaseUrl, databaseEnv.encryptionKey);
-    const firstApp = buildApp({ env: databaseEnv, store: firstRuntime.store });
+    const dbLlmProvider = new MockLlmProvider();
+    const firstApp = buildApp({
+      env: databaseEnv,
+      store: firstRuntime.store,
+      llmService: new LlmService(firstRuntime.store, dbLlmProvider, dbLlmProvider)
+    });
     const cookie = await login(firstApp);
     const save = await createAcceptedSave(firstApp, cookie, `持久化测试 ${crypto.randomUUID()}`);
     const apiKey = "test-secret-api-key-value";
