@@ -3,7 +3,7 @@ services:
     name: fantasyworld
     runtime: node
     plan: free
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
     startCommand: pnpm db:migrate && pnpm --filter @fantasy-world/api start
     envVars:
       - key: NODE_ENV
