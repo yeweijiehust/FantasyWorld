@@ -129,14 +129,29 @@ function makeSave(): Save {
   };
 }
 
+class MockEventSource {
+  onerror: (() => void) | null = null;
+
+  constructor(
+    readonly url: string,
+    readonly init?: EventSourceInit
+  ) {}
+
+  addEventListener() {}
+
+  close() {}
+}
+
 describe("WorldPage", () => {
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(async () => {
     localStorage.clear();
     vi.clearAllMocks();
+    vi.stubGlobal("EventSource", MockEventSource);
     await i18n.changeLanguage("en");
     useUiStore.setState({ selectedSaveId: undefined, uiLanguage: "en" });
     apiMock.saves.mockResolvedValue([]);
@@ -178,5 +193,54 @@ describe("WorldPage", () => {
     expect(screen.getAllByText("World settings").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Save character" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Add relationship" }).length).toBeGreaterThan(0);
+  });
+
+  it("shows failed turn jobs with recovery controls", async () => {
+    const save = makeSave();
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    const failedJob = {
+      id: "turn_job_failed",
+      saveId: save.id,
+      status: "failed" as const,
+      phase: "validating_turn_references",
+      input: {
+        gmInstruction: "Break references",
+        idempotencyKey: "turn_failed"
+      },
+      error: "Unknown focus character id: character_missing",
+      failure: {
+        code: "invalid_llm_reference",
+        message: "Unknown focus character id: character_missing",
+        phase: "validating_turn_references",
+        retryable: true,
+        createdAt: "2026-06-18T00:00:00.000Z",
+        provider: "openai-compatible"
+      }
+    };
+
+    apiMock.saves.mockResolvedValue([item]);
+    apiMock.save.mockResolvedValue(save);
+    apiMock.createTurn.mockResolvedValue(failedJob);
+    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
+
+    renderWithClient();
+
+    expect(await screen.findByRole("heading", { name: "Test World" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Advance turn" }));
+
+    expect(await screen.findByText("Job failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("invalid_llm_reference: Unknown focus character id: character_missing")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry job" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel job" })).toBeEnabled();
   });
 });

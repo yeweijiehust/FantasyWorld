@@ -6,6 +6,7 @@ import type {
   CreateSaveInput,
   CreateTurnInput,
   GeneratedWorldDraft,
+  JobFailure,
   LocationPatch,
   ModelConfig,
   PatchTurnDraftInput,
@@ -34,12 +35,23 @@ export type FantasyWorldStore = {
     input: CreateSaveInput,
     generatedDraft?: GeneratedWorldDraft
   ): SaveGenerationJob | Promise<SaveGenerationJob>;
+  createFailedGenerationJob(
+    input: CreateSaveInput,
+    failure: JobFailure
+  ): SaveGenerationJob | Promise<SaveGenerationJob>;
   getGenerationJobByIdempotencyKey(
     idempotencyKey: string
   ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   getGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
+  failGenerationJob(
+    jobId: string,
+    failure: JobFailure
+  ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   cancelGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
-  retryGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
+  retryGenerationJob(
+    jobId: string,
+    generatedDraft?: GeneratedWorldDraft
+  ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   acceptGenerationJob(jobId: string): Save | undefined | Promise<Save | undefined>;
   importSave(input: Save): Save | Promise<Save>;
   patchSave(
@@ -68,14 +80,23 @@ export type FantasyWorldStore = {
     input: CreateTurnInput,
     orchestration?: TurnOrchestrationOutput
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
+  createFailedTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    failure: JobFailure
+  ): TurnJob | undefined | Promise<TurnJob | undefined>;
   getTurnJobByIdempotencyKey(
     saveId: string,
     idempotencyKey: string
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   getActiveTurnJob(saveId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
+  failTurnJob(jobId: string, failure: JobFailure): TurnJob | undefined | Promise<TurnJob | undefined>;
   patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined | Promise<TurnJob | undefined>;
   cancelTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
-  retryTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
+  retryTurnJob(
+    jobId: string,
+    orchestration?: TurnOrchestrationOutput
+  ): TurnJob | undefined | Promise<TurnJob | undefined>;
   acceptTurn(turnId: string): Save | undefined | Promise<Save | undefined>;
   rollbackSave(saveId: string): Save | undefined | Promise<Save | undefined>;
   getTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;

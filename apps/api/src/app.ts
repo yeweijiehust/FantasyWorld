@@ -10,12 +10,15 @@ import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import {
   ApiErrorSchema,
   CharacterPatchSchema,
+  type CreateSaveInput,
   CreateCharacterInputSchema,
   CreateLocationInputSchema,
   CreateRelationshipInputSchema,
   CreateSaveInputSchema,
+  type CreateTurnInput,
   CreateTurnInputSchema,
   GeneratedWorldDraftSchema,
+  type JobFailure,
   LocationPatchSchema,
   ModelConfigSchema,
   ModelProbeInputSchema,
@@ -26,6 +29,7 @@ import {
   SaveGenerationJobSchema,
   SaveImportSchema,
   SaveListItemSchema,
+  type Save,
   SaveSchema,
   SessionSchema,
   TurnOrchestrationOutputSchema,
@@ -602,18 +606,14 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
 
-      const generatedDraft = await llmService.generateJson({
-        schema: GeneratedWorldDraftSchema,
-        schemaName: "GeneratedWorldDraft",
-        systemPrompt: buildWorldGenerationSystemPrompt(),
-        userPrompt: buildWorldGenerationUserPrompt(request.body),
-        mockOutput: buildGeneratedWorldDraft(request.body),
-        temperature: 0.7,
-        maxTokens: 4_000
-      });
+      const generatedDraft = await generateWorldDraft(llmService, request.body);
 
       if (!generatedDraft.ok) {
-        return sendError(reply, 502, generatedDraft.error.code, generatedDraft.error.message);
+        reply.code(201);
+        return await store.createFailedGenerationJob(
+          request.body,
+          toJobFailure("generating_world_draft", generatedDraft)
+        );
       }
 
       reply.code(201);
@@ -681,7 +681,38 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = await store.retryGenerationJob(request.params.id);
+      const current = await store.getGenerationJob(request.params.id);
+
+      if (!current) {
+        return sendError(reply, 404, "not_found", "Generation job not found");
+      }
+
+      if (
+        current.status === "queued" ||
+        current.status === "running" ||
+        current.status === "needs_review" ||
+        current.status === "accepted"
+      ) {
+        return current;
+      }
+
+      const input = current.input ?? current.draft?.input;
+
+      if (!input) {
+        return sendError(reply, 404, "not_found", "Generation job input not found");
+      }
+
+      const generatedDraft = await generateWorldDraft(llmService, input);
+
+      if (!generatedDraft.ok) {
+        const job = await store.failGenerationJob(
+          request.params.id,
+          toJobFailure("generating_world_draft", generatedDraft)
+        );
+        return job ?? sendError(reply, 404, "not_found", "Generation job not found");
+      }
+
+      const job = await store.retryGenerationJob(request.params.id, generatedDraft.output);
       return job ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
   );
@@ -739,24 +770,18 @@ export function buildApp(options: BuildAppOptions) {
         return active;
       }
 
-      const orchestration = await llmService.generateJson({
-        schema: TurnOrchestrationOutputSchema,
-        schemaName: "TurnOrchestrationOutput",
-        systemPrompt: buildTurnGenerationSystemPrompt(),
-        userPrompt: buildTurnGenerationUserPrompt(save, request.body),
-        mockOutput: createTurnOrchestration(save, request.body),
-        temperature: 0.65,
-        maxTokens: 4_000
-      });
+      const orchestration = await generateTurnDraft(llmService, save, request.body);
 
       if (!orchestration.ok) {
-        return sendError(reply, 502, orchestration.error.code, orchestration.error.message);
-      }
-
-      const referenceError = validateTurnGenerationOutput(save, orchestration.output);
-
-      if (referenceError) {
-        return sendError(reply, 502, "invalid_llm_reference", referenceError);
+        const failurePhase =
+          orchestration.error.code === "invalid_llm_reference" ? "validating_turn_references" : "generating_turn_draft";
+        const job = await store.createFailedTurnJob(
+          request.params.id,
+          request.body,
+          toJobFailure(failurePhase, orchestration)
+        );
+        reply.code(201);
+        return job ?? sendError(reply, 404, "not_found", "Save not found");
       }
 
       const job = await store.createTurnJob(request.params.id, request.body, orchestration.output);
@@ -848,7 +873,37 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = await store.retryTurnJob(request.params.id);
+      const current = await store.getTurnJob(request.params.id);
+
+      if (!current) {
+        return sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
+      if (
+        current.status === "queued" ||
+        current.status === "running" ||
+        current.status === "needs_review" ||
+        current.status === "accepted"
+      ) {
+        return current;
+      }
+
+      const save = await store.getSave(current.saveId);
+
+      if (!save) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
+      const orchestration = await generateTurnDraft(llmService, save, current.input ?? {});
+
+      if (!orchestration.ok) {
+        const failurePhase =
+          orchestration.error.code === "invalid_llm_reference" ? "validating_turn_references" : "generating_turn_draft";
+        const job = await store.failTurnJob(request.params.id, toJobFailure(failurePhase, orchestration));
+        return job ?? sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
+      const job = await store.retryTurnJob(request.params.id, orchestration.output);
       return job ?? sendError(reply, 404, "not_found", "Turn job not found");
     }
   );
@@ -920,6 +975,85 @@ type SseReply = {
     on?: (event: "close", listener: () => void) => void;
   };
 };
+
+type FailedLlmJobResult = {
+  ok: false;
+  provider: string;
+  rawOutput?: string;
+  error: {
+    code: string;
+    message: string;
+  };
+};
+
+function generateWorldDraft(llmService: LlmService, input: CreateSaveInput) {
+  return llmService.generateJson({
+    schema: GeneratedWorldDraftSchema,
+    schemaName: "GeneratedWorldDraft",
+    systemPrompt: buildWorldGenerationSystemPrompt(),
+    userPrompt: buildWorldGenerationUserPrompt(input),
+    mockOutput: buildGeneratedWorldDraft(input),
+    temperature: 0.7,
+    maxTokens: 4_000
+  });
+}
+
+async function generateTurnDraft(llmService: LlmService, save: Save, input: CreateTurnInput) {
+  const orchestration = await llmService.generateJson({
+    schema: TurnOrchestrationOutputSchema,
+    schemaName: "TurnOrchestrationOutput",
+    systemPrompt: buildTurnGenerationSystemPrompt(),
+    userPrompt: buildTurnGenerationUserPrompt(save, input),
+    mockOutput: createTurnOrchestration(save, input),
+    temperature: 0.65,
+    maxTokens: 4_000
+  });
+
+  if (!orchestration.ok) {
+    return orchestration;
+  }
+
+  const referenceError = validateTurnGenerationOutput(save, orchestration.output);
+
+  if (referenceError) {
+    return {
+      ok: false,
+      provider: orchestration.provider,
+      ...(orchestration.rawOutput ? { rawOutput: orchestration.rawOutput } : {}),
+      latencyMs: orchestration.latencyMs,
+      error: {
+        code: "invalid_llm_reference",
+        message: referenceError
+      }
+    } as const;
+  }
+
+  return orchestration;
+}
+
+function toJobFailure(phase: string, result: FailedLlmJobResult): JobFailure {
+  const rawOutputSummary = summarizeRawOutput(result.rawOutput);
+
+  return {
+    code: result.error.code,
+    message: result.error.message,
+    phase,
+    retryable: true,
+    createdAt: new Date().toISOString(),
+    provider: result.provider,
+    ...(rawOutputSummary ? { rawOutputSummary } : {})
+  };
+}
+
+function summarizeRawOutput(rawOutput: string | undefined) {
+  const normalized = rawOutput?.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.length > 1_000 ? `${normalized.slice(0, 1_000)}...` : normalized;
+}
 
 function sendError<TStatusCode extends number>(
   reply: ReplyWithCode<TStatusCode>,

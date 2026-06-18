@@ -17,6 +17,17 @@ export const JobStatusSchema = Type.Union([
 ]);
 export type JobStatus = Static<typeof JobStatusSchema>;
 
+export const JobFailureSchema = Type.Object({
+  code: Type.String({ minLength: 1 }),
+  message: Type.String({ minLength: 1 }),
+  phase: Type.String({ minLength: 1 }),
+  retryable: Type.Boolean(),
+  createdAt: Type.String(),
+  provider: Type.Optional(Type.String({ minLength: 1 })),
+  rawOutputSummary: Type.Optional(Type.String({ minLength: 1 }))
+});
+export type JobFailure = Static<typeof JobFailureSchema>;
+
 export const RelationshipSchema = Type.Object({
   id: IdSchema,
   sourceCharacterId: IdSchema,
@@ -362,8 +373,10 @@ export const SaveGenerationJobSchema = Type.Object({
   status: JobStatusSchema,
   phase: Type.Optional(Type.String()),
   idempotencyKey: Type.Optional(Type.String()),
+  input: Type.Optional(CreateSaveInputSchema),
   draft: Type.Optional(SaveGenerationDraftSchema),
-  error: Type.Optional(Type.String())
+  error: Type.Optional(Type.String()),
+  failure: Type.Optional(JobFailureSchema)
 });
 export type SaveGenerationJob = Static<typeof SaveGenerationJobSchema>;
 
@@ -421,7 +434,8 @@ export const TurnJobSchema = Type.Object({
   input: Type.Optional(CreateTurnInputSchema),
   turn: Type.Optional(TurnSchema),
   draftState: Type.Optional(TurnDraftStateSchema),
-  error: Type.Optional(Type.String())
+  error: Type.Optional(Type.String()),
+  failure: Type.Optional(JobFailureSchema)
 });
 export type TurnJob = Static<typeof TurnJobSchema>;
 

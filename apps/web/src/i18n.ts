@@ -59,6 +59,7 @@ const resources = {
         model: "Model",
         generateDraft: "Generate draft",
         draftReady: "Draft ready",
+        generationFailed: "Draft generation failed",
         acceptDraft: "Accept draft",
         importJson: "Import JSON",
         importSaveJson: "Import save JSON",
@@ -78,6 +79,8 @@ const resources = {
         turnAccepted: "Turn accepted",
         cancelJob: "Cancel job",
         retryJob: "Retry job",
+        jobFailed: "Job failed",
+        failureReason: "{{code}}: {{message}}",
         mockReady: "Mock LLM ready",
         draft: "Draft"
       },
@@ -152,6 +155,7 @@ const resources = {
         model: "模型",
         generateDraft: "生成草稿",
         draftReady: "草稿已就绪",
+        generationFailed: "草稿生成失败",
         acceptDraft: "接受草稿",
         importJson: "导入 JSON",
         importSaveJson: "导入存档 JSON",
@@ -171,6 +175,8 @@ const resources = {
         turnAccepted: "回合已接受",
         cancelJob: "取消任务",
         retryJob: "重试任务",
+        jobFailed: "任务失败",
+        failureReason: "{{code}}：{{message}}",
         mockReady: "Mock LLM 已就绪",
         draft: "草稿"
       },

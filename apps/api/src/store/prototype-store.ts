@@ -7,6 +7,7 @@ import type {
   CreateRelationshipInput,
   JobStatus,
   GeneratedWorldDraft,
+  JobFailure,
   Location,
   LocationPatch,
   ModelConfig,
@@ -149,12 +150,36 @@ export class PrototypeStore implements FantasyWorldStore {
       status: "needs_review",
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input,
       draft: {
         id: id("draft"),
         input,
         save,
         createdAt: now()
       }
+    };
+
+    this.generationJobs.set(job.id, job);
+    return structuredClone(job);
+  }
+
+  createFailedGenerationJob(input: CreateSaveInput, failure: JobFailure): SaveGenerationJob {
+    if (input.idempotencyKey) {
+      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const job: SaveGenerationJob = {
+      id: id("generation_job"),
+      status: "failed",
+      phase: failure.phase,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input,
+      error: failure.message,
+      failure
     };
 
     this.generationJobs.set(job.id, job);
@@ -171,6 +196,25 @@ export class PrototypeStore implements FantasyWorldStore {
     return job ? structuredClone(job) : undefined;
   }
 
+  failGenerationJob(jobId: string, failure: JobFailure): SaveGenerationJob | undefined {
+    const job = this.generationJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    const failed: SaveGenerationJob = {
+      ...job,
+      status: "failed",
+      phase: failure.phase,
+      error: failure.message,
+      failure
+    };
+
+    this.generationJobs.set(jobId, failed);
+    return structuredClone(failed);
+  }
+
   cancelGenerationJob(jobId: string): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
 
@@ -178,7 +222,7 @@ export class PrototypeStore implements FantasyWorldStore {
       return undefined;
     }
 
-    if (!isActiveJobStatus(job.status)) {
+    if (job.status === "cancelled" || job.status === "accepted") {
       return structuredClone(job);
     }
 
@@ -192,10 +236,11 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  retryGenerationJob(jobId: string): SaveGenerationJob | undefined {
+  retryGenerationJob(jobId: string, generatedDraft?: GeneratedWorldDraft): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
+    const input = job?.input ?? job?.draft?.input;
 
-    if (!job?.draft) {
+    if (!job || !input) {
       return undefined;
     }
 
@@ -203,16 +248,16 @@ export class PrototypeStore implements FantasyWorldStore {
       return structuredClone(job);
     }
 
-    const save = buildSave(job.draft.input);
     const retried: SaveGenerationJob = {
       id: job.id,
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input,
       draft: {
-        ...job.draft,
         id: id("draft"),
-        save,
+        input,
+        save: buildSave(input, generatedDraft),
         createdAt: now()
       }
     };
@@ -528,6 +573,42 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
+  createFailedTurnJob(saveId: string, input: CreateTurnInput, failure: JobFailure): TurnJob | undefined {
+    const save = this.saves.get(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (input.idempotencyKey) {
+      const existing = this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const active = this.getActiveTurnJob(saveId);
+
+    if (active) {
+      return active;
+    }
+
+    const job: TurnJob = {
+      id: id("turn_job"),
+      saveId,
+      status: "failed",
+      phase: failure.phase,
+      input,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      error: failure.message,
+      failure
+    };
+
+    this.turnJobs.set(job.id, job);
+    return structuredClone(job);
+  }
+
   getTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): TurnJob | undefined {
     const job = [...this.turnJobs.values()].find(
       (item) => item.saveId === saveId && item.idempotencyKey === idempotencyKey
@@ -538,6 +619,29 @@ export class PrototypeStore implements FantasyWorldStore {
   getActiveTurnJob(saveId: string): TurnJob | undefined {
     const job = [...this.turnJobs.values()].find((item) => item.saveId === saveId && isActiveJobStatus(item.status));
     return job ? structuredClone(job) : undefined;
+  }
+
+  failTurnJob(jobId: string, failure: JobFailure): TurnJob | undefined {
+    const job = this.turnJobs.get(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    const failed: TurnJob = {
+      ...job,
+      status: "failed",
+      phase: failure.phase,
+      error: failure.message,
+      failure
+    };
+
+    if (job.turn) {
+      failed.turn = { ...job.turn, status: "failed" };
+    }
+
+    this.turnJobs.set(jobId, failed);
+    return structuredClone(failed);
   }
 
   patchTurnDraft(jobId: string, input: PatchTurnDraftInput): TurnJob | undefined {
@@ -564,7 +668,7 @@ export class PrototypeStore implements FantasyWorldStore {
       return undefined;
     }
 
-    if (!isActiveJobStatus(job.status)) {
+    if (job.status === "cancelled" || job.status === "accepted") {
       return structuredClone(job);
     }
 
@@ -582,7 +686,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  retryTurnJob(jobId: string): TurnJob | undefined {
+  retryTurnJob(jobId: string, orchestration?: TurnOrchestrationOutput): TurnJob | undefined {
     const job = this.turnJobs.get(jobId);
 
     if (!job) {
@@ -599,7 +703,14 @@ export class PrototypeStore implements FantasyWorldStore {
       return undefined;
     }
 
-    const { job: retried } = buildTurnDraft(save, job.input ?? {}, this.modelConfig.model, job.id, job.idempotencyKey);
+    const { job: retried } = buildTurnDraft(
+      save,
+      job.input ?? {},
+      this.modelConfig.model,
+      job.id,
+      job.idempotencyKey,
+      orchestration
+    );
 
     this.turnJobs.set(jobId, retried);
 

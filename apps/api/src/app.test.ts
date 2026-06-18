@@ -8,7 +8,8 @@ import { createDatabaseStore } from "./db/client.js";
 import { MockLlmProvider } from "./llm/mock-provider.js";
 import { LlmService } from "./llm/service.js";
 import type { LlmProvider } from "./llm/types.js";
-import { PrototypeStore } from "./store/prototype-store.js";
+import { buildGeneratedWorldDraft, PrototypeStore } from "./store/prototype-store.js";
+import { createTurnOrchestration } from "./turn/orchestrator.js";
 import type {
   ModelConfig,
   ModelProbeResult,
@@ -601,12 +602,27 @@ describe("FantasyWorld API prototype", () => {
     await app.close();
   });
 
-  it("rejects invalid structured LLM save drafts without creating a job", async () => {
+  it("keeps invalid structured LLM save drafts as retryable failed jobs", async () => {
     const store = new PrototypeStore();
     store.updateModelConfig({
       model: "story-model",
       apiKey: "test-secret-api-key-value"
     });
+    let calls = 0;
+    const payload = {
+      templateId: "fantasy-frontier",
+      name: "Broken Draft",
+      premise: "The model returns an invalid world.",
+      characterSeeds: ["Ada", "Bryn", "Cato"],
+      settings: {
+        language: "en" as const,
+        turnTimeScale: "One scene",
+        randomness: 30,
+        contentBoundary: "PG",
+        styleGuide: "Keep it coherent"
+      },
+      idempotencyKey: "failed-world-generation"
+    };
     const openAiProvider: LlmProvider = {
       probe() {
         return Promise.resolve({
@@ -621,6 +637,17 @@ describe("FantasyWorld API prototype", () => {
         });
       },
       generateJson() {
+        calls += 1;
+
+        if (calls > 1) {
+          return Promise.resolve({
+            ok: true,
+            provider: "openai-compatible",
+            output: buildGeneratedWorldDraft(payload),
+            latencyMs: 1
+          });
+        }
+
         return Promise.resolve({
           ok: true,
           provider: "openai-compatible",
@@ -648,10 +675,102 @@ describe("FantasyWorld API prototype", () => {
       headers: {
         cookie
       },
+      payload
+    });
+    const saves = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(generation.statusCode).toBe(201);
+    const failedJob = generation.json<SaveGenerationJob>();
+    expect(failedJob.status).toBe("failed");
+    expect(failedJob.failure?.code).toBe("schema_validation_failed");
+    expect(failedJob.phase).toBe("generating_world_draft");
+    expect(failedJob.draft).toBeUndefined();
+    expect(saves.json<SaveListItem[]>()).toEqual([]);
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
+      payload
+    });
+
+    expect(duplicate.statusCode).toBe(201);
+    expect(duplicate.json<SaveGenerationJob>().id).toBe(failedJob.id);
+    expect(calls).toBe(1);
+
+    const retried = await app.inject({
+      method: "POST",
+      url: `/api/save-generation-jobs/${failedJob.id}/retry`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json<SaveGenerationJob>().status).toBe("needs_review");
+    expect(retried.json<SaveGenerationJob>().draft?.save.name).toBe("Broken Draft");
+    expect(calls).toBe(2);
+
+    await app.close();
+  });
+
+  it("stores provider JSON failures as failed generation jobs with raw output summaries", async () => {
+    const store = new PrototypeStore();
+    store.updateModelConfig({
+      model: "story-model",
+      apiKey: "test-secret-api-key-value"
+    });
+    const openAiProvider: LlmProvider = {
+      probe() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "story-model",
+            hasApiKey: true
+          },
+          latencyMs: 1
+        });
+      },
+      generateJson() {
+        return Promise.resolve({
+          ok: false,
+          provider: "openai-compatible",
+          rawOutput: `{ "description": "${"broken ".repeat(240)}"`,
+          error: {
+            code: "invalid_json",
+            message: "The model returned invalid JSON"
+          },
+          latencyMs: 1
+        });
+      }
+    };
+    const app = buildApp({
+      env,
+      store,
+      llmService: new LlmService(store, undefined, openAiProvider)
+    });
+    const cookie = await login(app);
+
+    const generation = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie
+      },
       payload: {
         templateId: "fantasy-frontier",
-        name: "Broken Draft",
-        premise: "The model returns an invalid world.",
+        name: "Broken JSON",
+        premise: "The model returns malformed JSON.",
         characterSeeds: ["Ada", "Bryn", "Cato"],
         settings: {
           language: "en",
@@ -662,17 +781,14 @@ describe("FantasyWorld API prototype", () => {
         }
       }
     });
-    const saves = await app.inject({
-      method: "GET",
-      url: "/api/saves",
-      headers: {
-        cookie
-      }
-    });
 
-    expect(generation.statusCode).toBe(502);
-    expect(generation.json<{ error: { code: string } }>().error.code).toBe("schema_validation_failed");
-    expect(saves.json<SaveListItem[]>()).toEqual([]);
+    expect(generation.statusCode).toBe(201);
+    const job = generation.json<SaveGenerationJob>();
+    expect(job.status).toBe("failed");
+    expect(job.failure?.code).toBe("invalid_json");
+    expect(job.failure?.provider).toBe("openai-compatible");
+    expect(job.failure?.rawOutputSummary?.length).toBeLessThanOrEqual(1_003);
+    expect(job.failure?.rawOutputSummary).toContain("broken");
 
     await app.close();
   });
@@ -1113,9 +1229,13 @@ describe("FantasyWorld API prototype", () => {
     await app.close();
   });
 
-  it("rejects LLM turn drafts that reference unknown world IDs", async () => {
+  it("keeps invalid LLM turn references as retryable failed jobs", async () => {
     const store = new PrototypeStore();
     let calls = 0;
+    const turnInput = {
+      gmInstruction: "让模型返回坏结构",
+      idempotencyKey: "invalid-llm-turn"
+    };
     const openAiProvider: LlmProvider = {
       probe() {
         return Promise.resolve({
@@ -1132,6 +1252,15 @@ describe("FantasyWorld API prototype", () => {
       },
       generateJson() {
         calls += 1;
+
+        if (calls > 1) {
+          return Promise.resolve({
+            ok: true,
+            provider: "openai-compatible",
+            output: createTurnOrchestration(save, turnInput),
+            latencyMs: 1
+          });
+        }
 
         return Promise.resolve({
           ok: true,
@@ -1203,10 +1332,7 @@ describe("FantasyWorld API prototype", () => {
       headers: {
         cookie
       },
-      payload: {
-        gmInstruction: "让模型返回坏结构",
-        idempotencyKey: "invalid-llm-turn"
-      }
+      payload: turnInput
     });
     const saveAfterFailure = await app.inject({
       method: "GET",
@@ -1216,11 +1342,40 @@ describe("FantasyWorld API prototype", () => {
       }
     });
 
-    expect(turn.statusCode).toBe(502);
-    expect(turn.json<{ error: { code: string } }>().error.code).toBe("invalid_llm_reference");
+    expect(turn.statusCode).toBe(201);
+    const failedJob = turn.json<TurnJob>();
+    expect(failedJob.status).toBe("failed");
+    expect(failedJob.failure?.code).toBe("invalid_llm_reference");
+    expect(failedJob.phase).toBe("validating_turn_references");
     expect(calls).toBe(1);
     expect(saveAfterFailure.json<Save>().turns).toHaveLength(0);
     expect(saveAfterFailure.json<Save>().turnNumber).toBe(0);
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: turnInput
+    });
+
+    expect(duplicate.statusCode).toBe(201);
+    expect(duplicate.json<TurnJob>().id).toBe(failedJob.id);
+    expect(calls).toBe(1);
+
+    const retried = await app.inject({
+      method: "POST",
+      url: `/api/turn-jobs/${failedJob.id}/retry`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json<TurnJob>().status).toBe("needs_review");
+    expect(retried.json<TurnJob>().turn?.turnNumber).toBe(1);
+    expect(calls).toBe(2);
 
     await app.close();
   });

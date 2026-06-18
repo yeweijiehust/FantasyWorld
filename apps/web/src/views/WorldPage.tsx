@@ -571,6 +571,37 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
                 </div>
               </div>
             ) : null}
+            {currentGenerationJob?.status === "failed" ? (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-900">
+                <div className="font-semibold">{t("world.generationFailed")}</div>
+                {currentGenerationJob.failure ? (
+                  <div className="mt-1 text-sm text-red-800">
+                    {t("world.failureReason", {
+                      code: currentGenerationJob.failure.code,
+                      message: currentGenerationJob.failure.message
+                    })}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
+                    type="button"
+                    disabled={retryGeneration.isPending}
+                    onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
+                  >
+                    {t("common.retry")}
+                  </button>
+                  <button
+                    className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
+                    type="button"
+                    disabled={cancelGeneration.isPending}
+                    onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="flex justify-between gap-2">
@@ -838,7 +869,9 @@ function Timeline({ save }: { save: Save }) {
                 <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                   type="button"
-                  disabled={cancelTurn.isPending || activeTurnJob.status !== "needs_review"}
+                  disabled={
+                    cancelTurn.isPending || activeTurnJob.status === "cancelled" || activeTurnJob.status === "accepted"
+                  }
                   onClick={() => cancelTurn.mutate(activeTurnJob.id)}
                 >
                   {t("world.cancelJob")}
@@ -846,7 +879,7 @@ function Timeline({ save }: { save: Save }) {
                 <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                   type="button"
-                  disabled={retryTurn.isPending || activeTurnJob.status === "needs_review"}
+                  disabled={retryTurn.isPending || activeTurnJobIsOpen || activeTurnJob.status === "accepted"}
                   onClick={() => retryTurn.mutate(activeTurnJob.id)}
                 >
                   {t("world.retryJob")}
@@ -862,6 +895,19 @@ function Timeline({ save }: { save: Save }) {
                 : t("world.mockReady")}
           </div>
         </div>
+        {activeTurnJob?.status === "failed" ? (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+            <div className="font-semibold">{t("world.jobFailed")}</div>
+            {activeTurnJob.failure ? (
+              <div className="mt-1 text-red-800">
+                {t("world.failureReason", {
+                  code: activeTurnJob.failure.code,
+                  message: activeTurnJob.failure.message
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {turn.error ? <p className="mt-2 text-sm text-red-600">{turn.error.message}</p> : null}
         {rollback.error ? <p className="mt-2 text-sm text-red-600">{rollback.error.message}</p> : null}
         {acceptTurn.error ? <p className="mt-2 text-sm text-red-600">{acceptTurn.error.message}</p> : null}

@@ -10,6 +10,7 @@ import {
   type CreateSaveInput,
   type CreateTurnInput,
   type GeneratedWorldDraft,
+  type JobFailure,
   type Location,
   type LocationPatch,
   type ModelConfig,
@@ -199,12 +200,43 @@ export class DatabaseStore implements FantasyWorldStore {
       status: "needs_review",
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input,
       draft: {
         id: id("draft"),
         input,
         save,
         createdAt: now()
       }
+    };
+
+    await this.db.insert(dbSchema.saveGenerationJobs).values({
+      id: job.id,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
+  async createFailedGenerationJob(input: CreateSaveInput, failure: JobFailure): Promise<SaveGenerationJob> {
+    if (input.idempotencyKey) {
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const job: SaveGenerationJob = {
+      id: id("generation_job"),
+      status: "failed",
+      phase: failure.phase,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input,
+      error: failure.message,
+      failure
     };
 
     await this.db.insert(dbSchema.saveGenerationJobs).values({
@@ -226,6 +258,29 @@ export class DatabaseStore implements FantasyWorldStore {
     return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
   }
 
+  async failGenerationJob(jobId: string, failure: JobFailure): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    const failed: SaveGenerationJob = {
+      ...job,
+      status: "failed",
+      phase: failure.phase,
+      error: failure.message,
+      failure
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: failed.status, data: failed, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(failed);
+  }
+
   async cancelGenerationJob(jobId: string): Promise<SaveGenerationJob | undefined> {
     const job = await this.getGenerationJob(jobId);
 
@@ -233,7 +288,7 @@ export class DatabaseStore implements FantasyWorldStore {
       return undefined;
     }
 
-    if (!isActiveJobStatus(job.status)) {
+    if (job.status === "cancelled" || job.status === "accepted") {
       return job;
     }
 
@@ -251,10 +306,14 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  async retryGenerationJob(jobId: string): Promise<SaveGenerationJob | undefined> {
+  async retryGenerationJob(
+    jobId: string,
+    generatedDraft?: GeneratedWorldDraft
+  ): Promise<SaveGenerationJob | undefined> {
     const job = await this.getGenerationJob(jobId);
+    const input = job?.input ?? job?.draft?.input;
 
-    if (!job?.draft) {
+    if (!job || !input) {
       return undefined;
     }
 
@@ -267,10 +326,11 @@ export class DatabaseStore implements FantasyWorldStore {
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input,
       draft: {
-        ...job.draft,
         id: id("draft"),
-        save: buildSave(job.draft.input),
+        input,
+        save: buildSave(input, generatedDraft),
         createdAt: now()
       }
     };
@@ -613,6 +673,80 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
+  async createFailedTurnJob(saveId: string, input: CreateTurnInput, failure: JobFailure): Promise<TurnJob | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (input.idempotencyKey) {
+      const existing = await this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const active = await this.getActiveTurnJob(saveId);
+
+    if (active) {
+      return active;
+    }
+
+    const job: TurnJob = {
+      id: id("turn_job"),
+      saveId,
+      status: "failed",
+      phase: failure.phase,
+      input,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      error: failure.message,
+      failure
+    };
+
+    await this.db.insert(dbSchema.turnJobs).values({
+      id: job.id,
+      saveId,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
+  async failTurnJob(jobId: string, failure: JobFailure): Promise<TurnJob | undefined> {
+    const row = await this.db.query.turnJobs.findFirst({
+      where: eq(dbSchema.turnJobs.id, jobId)
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const job = row.data as TurnJob;
+    const failed: TurnJob = {
+      ...job,
+      status: "failed",
+      phase: failure.phase,
+      error: failure.message,
+      failure
+    };
+
+    if (job.turn) {
+      failed.turn = { ...job.turn, status: "failed" };
+    }
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: failed.status, data: failed, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(failed);
+  }
+
   async patchTurnDraft(jobId: string, input: PatchTurnDraftInput): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
@@ -647,7 +781,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const job = row.data as TurnJob;
 
-    if (!isActiveJobStatus(job.status)) {
+    if (job.status === "cancelled" || job.status === "accepted") {
       return structuredClone(job);
     }
 
@@ -682,7 +816,7 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  async retryTurnJob(jobId: string): Promise<TurnJob | undefined> {
+  async retryTurnJob(jobId: string, orchestration?: TurnOrchestrationOutput): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
     });
@@ -708,7 +842,8 @@ export class DatabaseStore implements FantasyWorldStore {
       job.input ?? {},
       (await this.getModelConfig()).model,
       job.id,
-      job.idempotencyKey
+      job.idempotencyKey,
+      orchestration
     );
 
     await this.db.transaction(async (tx) => {
