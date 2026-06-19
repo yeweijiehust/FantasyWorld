@@ -204,6 +204,50 @@ describe("FantasyWorld API auth and model config safety", () => {
     await app.close();
   });
 
+  it("separates app health from model health and skips live smoke tests without a key", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+
+    const appHealth = await app.inject({
+      method: "GET",
+      url: "/api/health"
+    });
+    expect(appHealth.statusCode).toBe(200);
+    expect(appHealth.json()).toEqual({ ok: true, app: { status: "ok" } });
+
+    const cookie = await login(app);
+    const modelHealth = await app.inject({
+      method: "GET",
+      url: "/api/model-health",
+      headers: {
+        cookie
+      }
+    });
+    expect(modelHealth.statusCode).toBe(200);
+    expect(modelHealth.json()).toMatchObject({
+      status: "not_configured",
+      provider: "mock",
+      recent: {
+        calls: 0
+      }
+    });
+
+    const smoke = await app.inject({
+      method: "POST",
+      url: "/api/model-health/smoke-test",
+      headers: {
+        cookie
+      }
+    });
+    expect(smoke.statusCode).toBe(200);
+    expect(smoke.json()).toMatchObject({
+      ok: true,
+      status: "skipped",
+      provider: "mock"
+    });
+
+    await app.close();
+  });
+
   it("rejects unauthorized requests, bad passwords, and logged-out sessions", async () => {
     const app = buildApp({ env, store: new PrototypeStore() });
 

@@ -6,8 +6,11 @@ import type {
   CreateRelationshipInput,
   CreateSaveInput,
   CreateTurnInput,
+  AppHealth,
+  LlmSmokeTestResult,
   LocationPatch,
   ModelConfig,
+  ModelHealth,
   ModelProbeInput,
   ModelProbeResult,
   PatchTurnDraftInput,
@@ -56,7 +59,10 @@ export const api = {
   login: (password: string, username = "admin") =>
     request<Session>("/api/auth/login", { method: "POST", body: { username, password } }),
   logout: () => request<Session>("/api/auth/logout", { method: "POST" }),
+  health: () => request<AppHealth>("/api/health"),
   modelConfig: () => request<ModelConfig>("/api/model-config"),
+  modelHealth: () => request<ModelHealth>("/api/model-health"),
+  runModelSmokeTest: () => request<LlmSmokeTestResult>("/api/model-health/smoke-test", { method: "POST" }),
   updateModelConfig: (body: Partial<ModelConfig> & { apiKey?: string }) =>
     request<ModelConfig>("/api/model-config", { method: "PUT", body }),
   probeModelConfig: (body: ModelProbeInput) =>

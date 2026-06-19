@@ -158,6 +158,55 @@ export const ModelProbeResultSchema = Type.Object({
 });
 export type ModelProbeResult = Static<typeof ModelProbeResultSchema>;
 
+export const AppHealthSchema = Type.Object({
+  ok: Type.Boolean(),
+  app: Type.Object({
+    status: Type.Literal("ok")
+  })
+});
+export type AppHealth = Static<typeof AppHealthSchema>;
+
+export const LlmRecentMetricsSchema = Type.Object({
+  windowSize: Type.Number({ minimum: 0 }),
+  calls: Type.Number({ minimum: 0 }),
+  failures: Type.Number({ minimum: 0 }),
+  errorRate: Type.Number({ minimum: 0, maximum: 1 }),
+  averageLatencyMs: Type.Number({ minimum: 0 })
+});
+export type LlmRecentMetrics = Static<typeof LlmRecentMetricsSchema>;
+
+export const ModelHealthSchema = Type.Object({
+  status: Type.Union([Type.Literal("not_configured"), Type.Literal("ready"), Type.Literal("degraded")]),
+  hasApiKey: Type.Boolean(),
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  model: Type.String(),
+  lastCheckedAt: Type.Optional(Type.String()),
+  lastError: Type.Optional(
+    Type.Object({
+      code: Type.String(),
+      message: Type.String()
+    })
+  ),
+  recent: LlmRecentMetricsSchema
+});
+export type ModelHealth = Static<typeof ModelHealthSchema>;
+
+export const LlmSmokeTestResultSchema = Type.Object({
+  ok: Type.Boolean(),
+  status: Type.Union([Type.Literal("skipped"), Type.Literal("succeeded"), Type.Literal("failed")]),
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  model: Type.String(),
+  latencyMs: Type.Optional(Type.Number({ minimum: 0 })),
+  message: Type.String(),
+  error: Type.Optional(
+    Type.Object({
+      code: Type.String(),
+      message: Type.String()
+    })
+  )
+});
+export type LlmSmokeTestResult = Static<typeof LlmSmokeTestResultSchema>;
+
 export const UserSchema = Type.Object({
   id: IdSchema,
   username: Type.String({ minLength: 1 }),

@@ -8,8 +8,11 @@ import { i18n } from "../i18n.js";
 import { SettingsPage } from "./SettingsPage.js";
 
 const apiMock = vi.hoisted(() => ({
+  health: vi.fn(),
+  modelHealth: vi.fn(),
   modelConfig: vi.fn(),
   probeModelConfig: vi.fn(),
+  runModelSmokeTest: vi.fn(),
   updateModelConfig: vi.fn()
 }));
 
@@ -41,6 +44,25 @@ describe("SettingsPage", () => {
     localStorage.clear();
     vi.clearAllMocks();
     await i18n.changeLanguage("en");
+    apiMock.health.mockResolvedValue({
+      ok: true,
+      app: {
+        status: "ok"
+      }
+    });
+    apiMock.modelHealth.mockResolvedValue({
+      status: "not_configured",
+      hasApiKey: false,
+      provider: "mock",
+      model: "fantasy-model",
+      recent: {
+        windowSize: 50,
+        calls: 0,
+        failures: 0,
+        errorRate: 0,
+        averageLatencyMs: 0
+      }
+    });
     apiMock.modelConfig.mockResolvedValue({
       baseUrl: "https://api.example.test/v1",
       model: "fantasy-model",
@@ -62,6 +84,13 @@ describe("SettingsPage", () => {
         supportsUsage: true,
         supportsStream: false
       }
+    });
+    apiMock.runModelSmokeTest.mockResolvedValue({
+      ok: true,
+      status: "skipped",
+      provider: "mock",
+      model: "fantasy-model",
+      message: "No model API key is configured; live smoke test skipped."
     });
     apiMock.updateModelConfig.mockResolvedValue({
       baseUrl: "https://api.example.test/v1",
@@ -93,5 +122,17 @@ describe("SettingsPage", () => {
       })
     );
     expect(await screen.findByText("Connection ok via mock: JSON yes, usage yes, stream no.")).toBeInTheDocument();
+  });
+
+  it("shows model health and runs a skipped smoke test without an API key", async () => {
+    renderWithClient();
+
+    expect(await screen.findByRole("heading", { name: "Health" })).toBeInTheDocument();
+    expect(await screen.findByText("Status: not_configured")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Run smoke test" }));
+
+    await waitFor(() => expect(apiMock.runModelSmokeTest).toHaveBeenCalled());
+    expect(await screen.findByText("No model API key is configured; live smoke test skipped.")).toBeInTheDocument();
   });
 });

@@ -91,6 +91,8 @@ FantasyWorld/
 - `GET /api/auth/session`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
+- `GET /api/model-health`
+- `POST /api/model-health/smoke-test`
 - `GET /api/model-config`
 - `PUT /api/model-config`
 - `POST /api/model-config/probe`
@@ -188,6 +190,10 @@ FantasyWorld/
 - 支持 OpenAI-compatible 接口：base URL、API key、model。
 - LLM SDK 层保持薄封装，负责请求、结构化输出、重试、token/耗时统计和错误归一。
 - 保存模型配置时执行连接和能力探测，记录 JSON mode、usage、stream 支持情况。
+- 设置页提供 app health、model health、最近 LLM 调用错误率/平均延迟和手动 live smoke test；无 API key 时 live smoke
+  test 明确 skipped。
+- LLM 近期指标为进程内滑动窗口，只记录 provider、model、成功/失败、错误摘要和 latency，不记录 prompt、raw output 或 API
+  key。
 - 不支持 JSON mode 时使用纯文本 JSON 约束 + 本地 TypeBox 校验重试。
 - 全局模型配置提供默认 API key、base URL 和 model；存档级覆盖可修改 base URL、model、随机性和内容偏好，API
   key 默认继承全局配置。
@@ -228,7 +234,8 @@ FantasyWorld/
 - Render 连接 GitHub 仓库、填写生产环境变量和触发首次部署都由用户手动完成；项目实现侧只准备配置和提醒清单。
 - 用户完成 Render 连接后，`main` required checks 通过并合并会触发 Render 自动部署。
 - GitHub Actions 不直接调用 Render API，不在 GitHub Secrets 中保存 Render 部署密钥。
-- 生产备份、恢复演练和密钥轮换按 `plans/fantasyworld-backup-restore-runbook.md` 执行；正式轮换后由用户手动更新 Render `ENCRYPTION_KEY` 并 redeploy。
+- 生产备份、恢复演练和密钥轮换按 `plans/fantasyworld-backup-restore-runbook.md` 执行；正式轮换后由用户手动更新 Render
+  `ENCRYPTION_KEY` 并 redeploy。
 
 ## GitHub Actions
 

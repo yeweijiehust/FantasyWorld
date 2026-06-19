@@ -103,7 +103,20 @@ const resources = {
         yes: "yes",
         no: "no",
         testing: "Testing...",
-        save: "Save settings"
+        save: "Save settings",
+        healthTitle: "Health",
+        healthBody: "App health, model health, and recent LLM call metrics.",
+        refreshHealth: "Refresh",
+        appHealth: "App",
+        appOk: "App ok",
+        loadingHealth: "Loading...",
+        modelHealth: "Model",
+        modelHealthStatus: "Status: {{status}}",
+        modelHealthProvider: "Provider: {{provider}}",
+        modelHealthModel: "Model: {{model}}",
+        modelHealthMetrics: "{{calls}} calls, {{failures}} failures, {{errorRate}} error rate, {{latency}} ms avg",
+        runSmokeTest: "Run smoke test",
+        smokeTesting: "Testing..."
       }
     }
   },
@@ -204,7 +217,20 @@ const resources = {
         yes: "是",
         no: "否",
         testing: "测试中...",
-        save: "保存设置"
+        save: "保存设置",
+        healthTitle: "健康状态",
+        healthBody: "应用健康、模型健康和最近 LLM 调用指标。",
+        refreshHealth: "刷新",
+        appHealth: "应用",
+        appOk: "应用正常",
+        loadingHealth: "加载中...",
+        modelHealth: "模型",
+        modelHealthStatus: "状态：{{status}}",
+        modelHealthProvider: "Provider：{{provider}}",
+        modelHealthModel: "模型：{{model}}",
+        modelHealthMetrics: "{{calls}} 次调用，{{failures}} 次失败，错误率 {{errorRate}}，平均 {{latency}} ms",
+        runSmokeTest: "运行 smoke test",
+        smokeTesting: "测试中..."
       }
     }
   }

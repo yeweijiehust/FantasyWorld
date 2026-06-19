@@ -9,6 +9,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import {
   ApiErrorSchema,
+  AppHealthSchema,
   CharacterPatchSchema,
   type CreateSaveInput,
   CreateCharacterInputSchema,
@@ -21,8 +22,10 @@ import {
   GeneratedWorldDraftSchema,
   type JobFailure,
   type LlmCallSummary,
+  LlmSmokeTestResultSchema,
   LocationPatchSchema,
   ModelConfigSchema,
+  ModelHealthSchema,
   ModelConfigUpdateSchema,
   ModelProbeInputSchema,
   ModelProbeResultSchema,
@@ -167,11 +170,11 @@ export function buildApp(options: BuildAppOptions) {
     {
       schema: {
         response: {
-          200: Type.Object({ ok: Type.Boolean() })
+          200: AppHealthSchema
         }
       }
     },
-    () => ({ ok: true })
+    () => ({ ok: true, app: { status: "ok" as const } })
   );
 
   app.get(
@@ -276,6 +279,30 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request) => llmService.probeModel(request.body)
+  );
+
+  app.get(
+    "/api/model-health",
+    {
+      schema: {
+        response: {
+          200: ModelHealthSchema
+        }
+      }
+    },
+    async () => llmService.getModelHealth()
+  );
+
+  app.post(
+    "/api/model-health/smoke-test",
+    {
+      schema: {
+        response: {
+          200: LlmSmokeTestResultSchema
+        }
+      }
+    },
+    async () => llmService.runLiveSmokeTest()
   );
 
   app.get(

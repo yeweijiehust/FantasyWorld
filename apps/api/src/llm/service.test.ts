@@ -22,6 +22,19 @@ describe("LLM service", () => {
     expect(result.config.supportsStream).toBe(false);
   });
 
+  it("skips live smoke tests when no API key is configured", async () => {
+    const store = new PrototypeStore();
+    const service = new LlmService(store);
+
+    const result = await service.runLiveSmokeTest();
+    const health = await service.getModelHealth();
+
+    expect(result.status).toBe("skipped");
+    expect(result.ok).toBe(true);
+    expect(health.status).toBe("not_configured");
+    expect(health.recent.calls).toBe(0);
+  });
+
   it("uses the OpenAI-compatible provider when an API key is supplied", async () => {
     const store = new PrototypeStore();
     const openAiProvider: LlmProvider = {
@@ -67,6 +80,55 @@ describe("LLM service", () => {
     expect(result.config.apiKeyTail).toBe("alue");
     expect(result.config.supportsStream).toBe(true);
     expect(JSON.stringify(result)).not.toContain("test-api-key-value");
+  });
+
+  it("records model health metrics for live smoke tests", async () => {
+    const store = new PrototypeStore();
+    store.updateModelConfig({
+      baseUrl: "https://models.example.test/v1",
+      model: "live-model",
+      apiKey: "test-api-key-value"
+    });
+    const openAiProvider: LlmProvider = {
+      probe(input): Promise<ModelProbeResult> {
+        return Promise.resolve({
+          ok: false,
+          provider: "openai-compatible",
+          config: {
+            baseUrl: input.baseUrl,
+            model: input.model,
+            hasApiKey: Boolean(input.apiKey),
+            ...(input.apiKey ? { apiKeyTail: input.apiKey.slice(-4) } : {})
+          },
+          latencyMs: 42,
+          error: {
+            code: "provider_error",
+            message: "Provider unavailable"
+          }
+        });
+      },
+      generateJson() {
+        return Promise.resolve({
+          ok: true,
+          provider: "openai-compatible",
+          output: {},
+          latencyMs: 1
+        });
+      }
+    };
+    const service = new LlmService(store, undefined, openAiProvider);
+
+    const smoke = await service.runLiveSmokeTest();
+    const health = await service.getModelHealth();
+
+    expect(smoke.status).toBe("failed");
+    expect(health.status).toBe("degraded");
+    expect(health.recent.calls).toBe(1);
+    expect(health.recent.failures).toBe(1);
+    expect(health.recent.errorRate).toBe(1);
+    expect(health.recent.averageLatencyMs).toBe(42);
+    expect(health.lastError?.code).toBe("provider_error");
+    expect(JSON.stringify(health)).not.toContain("test-api-key-value");
   });
 
   it("generates and validates structured JSON through the mock provider", async () => {
