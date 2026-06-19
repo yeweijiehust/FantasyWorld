@@ -1101,6 +1101,7 @@ export class PrototypeStore implements FantasyWorldStore {
   rollbackSave(saveId: string): Save | undefined {
     const snapshots = this.rollbackSnapshots.get(saveId) ?? [];
     const previous = snapshots.at(-1);
+    const current = this.saves.get(saveId);
 
     if (!previous) {
       return undefined;
@@ -1109,6 +1110,7 @@ export class PrototypeStore implements FantasyWorldStore {
     const remaining = snapshots.slice(0, -1);
     const restored: Save = {
       ...previous,
+      turns: mergeTurns(previous.turns, current?.turns ?? []),
       updatedAt: now()
     };
 
@@ -1351,6 +1353,7 @@ export function buildTurnDraft(
   llmCall?: LlmCallSummary
 ) {
   const turnNumber = save.turnNumber + 1;
+  const branchContext = resolveBranchContext(save);
   const event =
     orchestration.focus.locationId !== undefined
       ? {
@@ -1371,6 +1374,7 @@ export function buildTurnDraft(
   const turn: Turn = {
     id: id("turn"),
     saveId: save.id,
+    ...branchContext,
     turnNumber,
     status: "needs_review",
     events: [event],
@@ -1466,6 +1470,8 @@ export function buildTurnDraft(
     characters: updatedCharacters,
     relationships: updatedRelationships,
     turns: [...save.turns, turn],
+    headTurnId: turn.id,
+    currentBranchId: branchContext.branchId,
     worldMemory: {
       ...save.worldMemory,
       timeline: [...save.worldMemory.timeline, orchestration.worldMemory.timelineEntry],
@@ -1486,6 +1492,37 @@ export function buildTurnDraft(
   };
 
   return { job, updatedSave };
+}
+
+function resolveBranchContext(save: Save): { parentTurnId?: string; branchId: string } {
+  const latestCurrentTurn = save.turns.filter((turn) => turn.turnNumber === save.turnNumber).at(-1);
+  const parentTurnId = save.headTurnId ?? (save.turnNumber > 0 ? latestCurrentTurn?.id : undefined);
+  const parentTurn = parentTurnId ? save.turns.find((turn) => turn.id === parentTurnId) : undefined;
+  const hasExistingFuture = parentTurnId
+    ? save.turns.some((turn) => turn.parentTurnId === parentTurnId)
+    : save.turns.length > 0;
+  const branchId = hasExistingFuture ? id("branch") : (parentTurn?.branchId ?? save.currentBranchId ?? "branch_main");
+
+  return {
+    ...(parentTurnId ? { parentTurnId } : {}),
+    branchId
+  };
+}
+
+function mergeTurns(...turnGroups: Turn[][]): Turn[] {
+  const byId = new Map<string, Turn>();
+
+  for (const turn of turnGroups.flat()) {
+    byId.set(turn.id, turn);
+  }
+
+  return [...byId.values()].sort((left, right) => {
+    if (left.turnNumber !== right.turnNumber) {
+      return left.turnNumber - right.turnNumber;
+    }
+
+    return left.createdAt.localeCompare(right.createdAt);
+  });
 }
 
 export function patchTurnJobDraft(job: TurnJob, input: PatchTurnDraftInput): TurnJob | undefined {
@@ -1574,7 +1611,9 @@ export function applyTurnDraft(save: Save, job: TurnJob): Save | undefined {
 
   return {
     ...save,
-    turnNumber: Math.max(save.turnNumber, acceptedTurn.turnNumber),
+    turnNumber: acceptedTurn.turnNumber,
+    headTurnId: acceptedTurn.id,
+    ...(acceptedTurn.branchId ? { currentBranchId: acceptedTurn.branchId } : {}),
     characters,
     relationships,
     turns: [...save.turns.filter((turn) => turn.id !== acceptedTurn.id), acceptedTurn],

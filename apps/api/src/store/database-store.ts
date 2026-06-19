@@ -1297,10 +1297,15 @@ export class DatabaseStore implements FantasyWorldStore {
   }
 
   async rollbackSave(saveId: string): Promise<Save | undefined> {
-    const latestTurn = await this.db.query.turns.findFirst({
-      where: eq(dbSchema.turns.saveId, saveId),
-      orderBy: desc(dbSchema.turns.turnNumber)
-    });
+    const current = await this.readSave(saveId);
+    const latestTurn = current?.headTurnId
+      ? await this.db.query.turns.findFirst({
+          where: and(eq(dbSchema.turns.id, current.headTurnId), eq(dbSchema.turns.saveId, saveId))
+        })
+      : await this.db.query.turns.findFirst({
+          where: eq(dbSchema.turns.saveId, saveId),
+          orderBy: desc(dbSchema.turns.turnNumber)
+        });
 
     if (!latestTurn) {
       return undefined;
@@ -1313,9 +1318,6 @@ export class DatabaseStore implements FantasyWorldStore {
     };
 
     await this.db.transaction(async (tx) => {
-      await tx
-        .delete(dbSchema.turns)
-        .where(and(eq(dbSchema.turns.saveId, saveId), gt(dbSchema.turns.turnNumber, snapshot.turnNumber)));
       await this.replaceSaveState(tx, restored);
     });
 
@@ -1368,7 +1370,7 @@ export class DatabaseStore implements FantasyWorldStore {
         .select()
         .from(dbSchema.turns)
         .where(eq(dbSchema.turns.saveId, saveId))
-        .orderBy(asc(dbSchema.turns.turnNumber))
+        .orderBy(asc(dbSchema.turns.turnNumber), asc(dbSchema.turns.createdAt))
     ]);
 
     return {
@@ -1377,6 +1379,8 @@ export class DatabaseStore implements FantasyWorldStore {
       description: save.description,
       schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
       turnNumber: save.turnNumber,
+      ...(save.headTurnId ? { headTurnId: save.headTurnId } : {}),
+      ...(save.currentBranchId ? { currentBranchId: save.currentBranchId } : {}),
       saveSeed: save.saveSeed,
       settings: structuredClone(save.settings as Save["settings"]),
       ...(save.modelConfig
@@ -1401,6 +1405,8 @@ export class DatabaseStore implements FantasyWorldStore {
       description: save.description,
       schemaVersion: save.schemaVersion,
       turnNumber: save.turnNumber,
+      headTurnId: save.headTurnId ?? null,
+      currentBranchId: save.currentBranchId ?? null,
       saveSeed: save.saveSeed,
       settings: save.settings,
       modelConfig: save.modelConfig ? normalizeSaveModelConfig(save.modelConfig, false) : null,
@@ -1428,6 +1434,8 @@ export class DatabaseStore implements FantasyWorldStore {
         description: save.description,
         schemaVersion: save.schemaVersion,
         turnNumber: save.turnNumber,
+        headTurnId: save.headTurnId ?? null,
+        currentBranchId: save.currentBranchId ?? null,
         saveSeed: save.saveSeed,
         settings: save.settings,
         modelConfig: save.modelConfig ?? null,
@@ -1531,6 +1539,7 @@ function remapImportedSave(input: Save): Save {
     ...turn,
     id: turnIds.get(turn.id) ?? id("turn"),
     saveId,
+    ...(turn.parentTurnId ? { parentTurnId: turnIds.get(turn.parentTurnId) ?? turn.parentTurnId } : {}),
     events: turn.events.map((event) => {
       const locationId = event.locationId ? (locationIds.get(event.locationId) ?? event.locationId) : undefined;
       const dialogue = event.dialogue?.map((line) => ({
@@ -1573,6 +1582,7 @@ function remapImportedSave(input: Save): Save {
   return {
     ...input,
     id: saveId,
+    ...(input.headTurnId ? { headTurnId: turnIds.get(input.headTurnId) ?? input.headTurnId } : {}),
     worldMemory: {
       ...input.worldMemory,
       locationSummaries
@@ -1601,8 +1611,7 @@ function normalizeSaveModelConfig(input: ModelConfig, hasApiKey: boolean): Model
 
 function buildSnapshotBeforeTurn(save: Save, turn: Turn): Save {
   const previousTurnNumber = Math.max(0, turn.turnNumber - 1);
-
-  return {
+  const snapshot: Save = {
     ...save,
     turnNumber: previousTurnNumber,
     worldMemory: {
@@ -1611,6 +1620,19 @@ function buildSnapshotBeforeTurn(save: Save, turn: Turn): Save {
     },
     turns: save.turns.filter((item) => item.turnNumber < turn.turnNumber)
   };
+
+  delete snapshot.headTurnId;
+  delete snapshot.currentBranchId;
+
+  if (turn.parentTurnId) {
+    snapshot.headTurnId = turn.parentTurnId;
+  }
+
+  if (turn.branchId) {
+    snapshot.currentBranchId = turn.branchId;
+  }
+
+  return snapshot;
 }
 
 function relationshipCharactersExist(save: Save, sourceCharacterId: string, targetCharacterId: string) {

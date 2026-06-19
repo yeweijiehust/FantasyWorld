@@ -276,6 +276,8 @@ export type TurnOrchestrationOutput = Static<typeof TurnOrchestrationOutputSchem
 export const TurnSchema = Type.Object({
   id: IdSchema,
   saveId: IdSchema,
+  parentTurnId: Type.Optional(IdSchema),
+  branchId: Type.Optional(Type.String({ minLength: 1 })),
   turnNumber: Type.Number({ minimum: 1 }),
   status: JobStatusSchema,
   events: Type.Array(TurnEventSchema),
@@ -305,6 +307,8 @@ export const SaveSchema = Type.Object({
   description: Type.String(),
   schemaVersion: Type.Literal(CURRENT_SAVE_SCHEMA_VERSION),
   turnNumber: Type.Number({ minimum: 0 }),
+  headTurnId: Type.Optional(IdSchema),
+  currentBranchId: Type.Optional(Type.String({ minLength: 1 })),
   saveSeed: Type.String(),
   settings: SaveSettingsSchema,
   modelConfig: Type.Optional(ModelConfigSchema),

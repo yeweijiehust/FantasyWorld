@@ -6,6 +6,8 @@ export const saves = pgTable("saves", {
   description: text("description").notNull(),
   schemaVersion: text("schema_version").notNull(),
   turnNumber: integer("turn_number").notNull(),
+  headTurnId: text("head_turn_id"),
+  currentBranchId: text("current_branch_id"),
   saveSeed: text("save_seed").notNull(),
   settings: jsonb("settings").notNull(),
   modelConfig: jsonb("model_config"),

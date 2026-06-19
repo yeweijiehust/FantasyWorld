@@ -675,9 +675,12 @@ function Timeline({ save }: { save: Save }) {
     activeTurnJob?.status === "running" ||
     activeTurnJob?.status === "needs_review";
   const draftTurn = activeTurnJob?.status === "needs_review" ? activeTurnJob.turn : undefined;
+  const branchTurns = currentBranchTurns(save);
   const displayedTurns =
-    draftTurn && !save.turns.some((turnItem) => turnItem.id === draftTurn.id) ? [...save.turns, draftTurn] : save.turns;
-  const latestTurn = draftTurn ?? save.turns.at(-1);
+    draftTurn && !branchTurns.some((turnItem) => turnItem.id === draftTurn.id)
+      ? [...branchTurns, draftTurn]
+      : branchTurns;
+  const latestTurn = draftTurn ?? branchTurns.at(-1);
   const latestUsageSummary = latestTurn ? formatTurnUsage(latestTurn.callSummary, t) : undefined;
   const rollback = useMutation({
     mutationFn: () => api.rollbackSave(save.id),
@@ -829,6 +832,11 @@ function Timeline({ save }: { save: Save }) {
             ))}
           </div>
         )}
+        {save.turns.length > branchTurns.length ? (
+          <div className="mt-3 text-xs text-slate-500">
+            Branch timeline: {branchTurns.length} current / {save.turns.length} total turns
+          </div>
+        ) : null}
       </div>
       {activeTurnJob?.status === "needs_review" && activeTurnJob.turn && activeTurnJob.draftState ? (
         <TurnDraftEditor key={`${activeTurnJob.id}:${activeTurnJob.turn.id}`} job={activeTurnJob} save={save} />
@@ -1968,6 +1976,27 @@ function usageTokenText(callSummary: Save["turns"][number]["callSummary"]) {
   }
 
   return `~${callSummary.estimatedTokens} tokens`;
+}
+
+function currentBranchTurns(save: Save) {
+  const byId = new Map(save.turns.map((turn) => [turn.id, turn]));
+  const headTurnId =
+    save.headTurnId ??
+    (save.turnNumber > 0 ? save.turns.filter((turn) => turn.turnNumber === save.turnNumber).at(-1)?.id : undefined);
+
+  if (!headTurnId) {
+    return [];
+  }
+
+  const path: Save["turns"] = [];
+  let current = byId.get(headTurnId);
+
+  while (current) {
+    path.push(current);
+    current = current.parentTurnId ? byId.get(current.parentTurnId) : undefined;
+  }
+
+  return path.reverse();
 }
 
 function EmptyWorld() {

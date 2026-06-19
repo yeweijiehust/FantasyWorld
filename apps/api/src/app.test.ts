@@ -1947,7 +1947,7 @@ describe("FantasyWorld API prototype", () => {
 
     expect(rollback.statusCode).toBe(200);
     expect(rollback.json<{ turnNumber: number; turns: unknown[] }>().turnNumber).toBe(0);
-    expect(rollback.json<{ turns: unknown[] }>().turns.length).toBe(0);
+    expect(rollback.json<{ turns: unknown[] }>().turns.length).toBe(1);
 
     await app.close();
   });
@@ -2098,6 +2098,14 @@ describe("FantasyWorld API prototype", () => {
     expect(secondTurn?.events[0]?.body).toContain("关系");
     expect(secondTurn?.stateChanges.length).toBeGreaterThan(1);
 
+    await app.inject({
+      method: "POST",
+      url: `/api/turn-jobs/${second.json<TurnJob>().id}/cancel`,
+      headers: {
+        cookie
+      }
+    });
+
     const rollback = await app.inject({
       method: "POST",
       url: `/api/saves/${save.id}/rollback`,
@@ -2109,10 +2117,46 @@ describe("FantasyWorld API prototype", () => {
 
     expect(rollback.statusCode).toBe(200);
     expect(rolledBack.turnNumber).toBe(0);
-    expect(rolledBack.turns).toHaveLength(0);
+    expect(rolledBack.turns).toHaveLength(1);
+    expect(rolledBack.headTurnId).toBeUndefined();
     expect(
       rolledBack.characters.find((character) => character.id === characterDraft.characterId)?.shortTermGoal
     ).not.toBe("追查密探");
+
+    const branch = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie
+      },
+      payload: {
+        gmInstruction: "从回滚点开新分支",
+        idempotencyKey: "orchestration-branch"
+      }
+    });
+    const branchTurn = branch.json<TurnJob>().turn;
+
+    expect(branch.statusCode).toBe(201);
+    expect(branchTurn?.turnNumber).toBe(1);
+    expect(branchTurn?.parentTurnId).toBeUndefined();
+    expect(branchTurn?.branchId).not.toBe(rolledBack.turns[0]?.branchId);
+
+    if (!branchTurn) {
+      throw new Error("Missing branch turn");
+    }
+
+    const acceptedBranch = await app.inject({
+      method: "POST",
+      url: `/api/turns/${branchTurn.id}/accept`,
+      headers: {
+        cookie
+      }
+    });
+
+    expect(acceptedBranch.statusCode).toBe(200);
+    expect(acceptedBranch.json<Save>().turnNumber).toBe(1);
+    expect(acceptedBranch.json<Save>().turns).toHaveLength(2);
+    expect(acceptedBranch.json<Save>().headTurnId).toBe(branchTurn.id);
 
     await app.close();
   });
@@ -2554,6 +2598,8 @@ describeDb("FantasyWorld API database persistence", () => {
     expect(exportedPackage.schemaVersion).toBe("1");
     expect(exportedSave.turnNumber).toBe(1);
     expect(exportedSave.turns[0]?.status).toBe("accepted");
+    expect(exportedSave.headTurnId).toBe(exportedSave.turns[0]?.id);
+    expect(exportedSave.currentBranchId).toBe(exportedSave.turns[0]?.branchId);
     expect(JSON.stringify(exportedPackage)).not.toContain(apiKey);
     expect(JSON.stringify(exportedPackage)).not.toContain(saveApiKey);
     expect(exportedSave.modelConfig?.apiKeyTail).toBe("alue");
@@ -2568,7 +2614,7 @@ describeDb("FantasyWorld API database persistence", () => {
 
     expect(rollback.statusCode).toBe(200);
     expect(rollback.json<Save>().turnNumber).toBe(0);
-    expect(rollback.json<Save>().turns.length).toBe(0);
+    expect(rollback.json<Save>().turns.length).toBe(1);
 
     const imported = await firstApp.inject({
       method: "POST",
@@ -2582,6 +2628,9 @@ describeDb("FantasyWorld API database persistence", () => {
     expect(imported.statusCode).toBe(201);
     expect(imported.json<Save>().id).not.toBe(save.id);
     expect(imported.json<Save>().turnNumber).toBe(1);
+    expect(imported.json<Save>().headTurnId).toBe(imported.json<Save>().turns[0]?.id);
+    expect(imported.json<Save>().headTurnId).not.toBe(exportedSave.headTurnId);
+    expect(imported.json<Save>().currentBranchId).toBe(exportedSave.currentBranchId);
     expect(imported.json<Save>().modelConfig?.hasApiKey).toBe(false);
     expect(imported.json<Save>().modelConfig?.apiKeyTail).toBeUndefined();
 
@@ -2625,7 +2674,7 @@ describeDb("FantasyWorld API database persistence", () => {
 
     expect(importedRollback.statusCode).toBe(200);
     expect(importedRollback.json<Save>().turnNumber).toBe(0);
-    expect(importedRollback.json<Save>().turns.length).toBe(0);
+    expect(importedRollback.json<Save>().turns.length).toBe(1);
 
     await secondApp.close();
     await secondRuntime.close();
