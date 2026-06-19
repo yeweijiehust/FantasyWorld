@@ -6,8 +6,10 @@ import {
   type Language,
   type Location,
   type PatchTurnDraftInput,
+  type PlayerInput,
   type Relationship,
   type Save,
+  type SaveCollaborator,
   type SaveGenerationJob,
   type SaveImport,
   type StateChange,
@@ -1136,6 +1138,10 @@ function WorldDetails({ save }: { save: Save }) {
     <div className="grid gap-5">
       <WorldSettingsEditor key={`${save.id}:${JSON.stringify(save.settings)}`} save={save} />
       <WorldMemoryEditor key={`${save.id}:${save.worldMemory.worldSummary}`} save={save} />
+      <CollaborationPanel
+        key={`${save.id}:${save.characters.map((character) => character.id).join("|")}`}
+        save={save}
+      />
       <section>
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
           <Users size={16} />
@@ -1192,6 +1198,204 @@ function WorldDetails({ save }: { save: Save }) {
           <div className="text-sm text-slate-500">No turn accepted yet.</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function CollaborationPanel({ save }: { save: Save }) {
+  const queryClient = useQueryClient();
+  const collaborators = useQuery({
+    queryKey: ["collaborators", save.id],
+    queryFn: () => api.collaborators(save.id),
+    retry: false
+  });
+  const playerInputs = useQuery({
+    queryKey: ["player-inputs", save.id],
+    queryFn: () => api.playerInputs(save.id),
+    retry: false
+  });
+  const [username, setUsername] = useState("");
+  const [role, setRole] = useState<SaveCollaborator["role"]>("viewer");
+  const [characterId, setCharacterId] = useState(save.characters[0]?.id ?? "");
+  const [intent, setIntent] = useState("");
+  const addCollaborator = useMutation({
+    mutationFn: () =>
+      api.upsertCollaborator(save.id, {
+        username,
+        role,
+        ...(role === "player" && characterId ? { characterId } : {})
+      }),
+    onSuccess: async () => {
+      setUsername("");
+      await queryClient.invalidateQueries({ queryKey: ["collaborators", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const submitPlayerInput = useMutation({
+    mutationFn: () => api.createPlayerInput(save.id, { intent }),
+    onSuccess: async () => {
+      setIntent("");
+      await queryClient.invalidateQueries({ queryKey: ["player-inputs", save.id] });
+    }
+  });
+  const reviewPlayerInput = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected" }) =>
+      api.reviewPlayerInput(id, { status }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["player-inputs", save.id] });
+    }
+  });
+  const canManageCollaborators = !collaborators.error;
+  const visiblePlayerInputs = playerInputs.data ?? [];
+
+  return (
+    <section>
+      <div className="mb-2 text-sm font-semibold text-slate-950">Collaboration</div>
+      {canManageCollaborators ? (
+        <div className="grid gap-3">
+          <div className="grid gap-2">
+            {(collaborators.data ?? []).map((collaborator) => (
+              <CollaboratorRow
+                key={`${collaborator.saveId}:${collaborator.userId}:${collaborator.role}:${collaborator.characterId}`}
+                collaborator={collaborator}
+                save={save}
+              />
+            ))}
+            {collaborators.isLoading ? <div className="text-sm text-slate-500">Loading collaborators...</div> : null}
+          </div>
+          <div className="rounded-md border border-slate-200 p-3">
+            <div className="grid gap-2">
+              <input
+                aria-label="Collaborator username"
+                className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                placeholder="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+              <div className="grid grid-cols-[1fr_1fr] gap-2">
+                <select
+                  aria-label="Collaborator role"
+                  className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                  value={role}
+                  onChange={(event) => setRole(event.target.value as SaveCollaborator["role"])}
+                >
+                  <option value="gm">GM</option>
+                  <option value="viewer">Viewer</option>
+                  <option value="player">Player</option>
+                </select>
+                <select
+                  aria-label="Collaborator character"
+                  className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950 disabled:opacity-50"
+                  value={characterId}
+                  disabled={role !== "player"}
+                  onChange={(event) => setCharacterId(event.target.value)}
+                >
+                  {save.characters.map((character) => (
+                    <option key={character.id} value={character.id}>
+                      {character.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+                type="button"
+                disabled={addCollaborator.isPending || !username.trim()}
+                onClick={() => addCollaborator.mutate()}
+              >
+                <Plus size={14} />
+                Add collaborator
+              </button>
+              {addCollaborator.error ? <p className="text-sm text-red-600">{addCollaborator.error.message}</p> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3 rounded-md border border-slate-200 p-3">
+        <label className="grid gap-2 text-xs font-medium text-slate-600">
+          Player input
+          <textarea
+            aria-label="Player input"
+            className="min-h-20 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+            value={intent}
+            onChange={(event) => setIntent(event.target.value)}
+          />
+        </label>
+        <button
+          className="mt-2 inline-flex h-8 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+          type="button"
+          disabled={submitPlayerInput.isPending || !intent.trim()}
+          onClick={() => submitPlayerInput.mutate()}
+        >
+          <Sparkles size={14} />
+          Submit input
+        </button>
+        {submitPlayerInput.error ? (
+          <p className="mt-2 text-sm text-red-600">{submitPlayerInput.error.message}</p>
+        ) : null}
+      </div>
+      {visiblePlayerInputs.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {visiblePlayerInputs.map((input) => (
+            <PlayerInputRow key={`${input.id}:${input.status}`} input={input} review={reviewPlayerInput.mutate} />
+          ))}
+        </div>
+      ) : null}
+      {playerInputs.error && canManageCollaborators ? (
+        <p className="mt-2 text-sm text-red-600">{playerInputs.error.message}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function CollaboratorRow({ collaborator, save }: { collaborator: SaveCollaborator; save: Save }) {
+  const character = collaborator.characterId
+    ? save.characters.find((item) => item.id === collaborator.characterId)
+    : undefined;
+
+  return (
+    <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="font-semibold text-slate-800">{collaborator.username}</div>
+      <div>
+        {collaborator.role}
+        {character ? ` · ${character.name}` : ""}
+      </div>
+    </div>
+  );
+}
+
+function PlayerInputRow({
+  input,
+  review
+}: {
+  input: PlayerInput;
+  review: (payload: { id: string; status: "approved" | "rejected" }) => void;
+}) {
+  return (
+    <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-semibold text-slate-800">{input.username}</span>
+        <span>{input.status}</span>
+      </div>
+      <div className="whitespace-pre-wrap leading-5">{input.intent}</div>
+      {input.status === "pending" ? (
+        <div className="mt-2 flex gap-2">
+          <button
+            className="h-7 rounded-md bg-slate-950 px-2 text-xs font-semibold text-white"
+            type="button"
+            onClick={() => review({ id: input.id, status: "approved" })}
+          >
+            Approve
+          </button>
+          <button
+            className="h-7 rounded-md border border-slate-200 px-2 text-xs font-semibold text-slate-700"
+            type="button"
+            onClick={() => review({ id: input.id, status: "rejected" })}
+          >
+            Reject
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

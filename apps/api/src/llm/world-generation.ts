@@ -3,7 +3,7 @@ import { getWorldTemplate } from "@fantasy-world/shared";
 
 export function buildWorldGenerationSystemPrompt() {
   return [
-    "You are the world generator for FantasyWorld, a single-player GM world simulation game.",
+    "You are the world generator for FantasyWorld, a GM-led world simulation game.",
     "Create a structured world draft for play, not a prose-only pitch.",
     "Use the requested language for all in-world content.",
     "Keep secrets, goals, private memories, relationships, and locations coherent enough for later turn simulation.",

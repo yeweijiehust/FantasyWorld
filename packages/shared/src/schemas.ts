@@ -165,6 +165,83 @@ export const UserSchema = Type.Object({
 });
 export type User = Static<typeof UserSchema>;
 
+export const SaveAccessRoleSchema = Type.Union([
+  Type.Literal("owner"),
+  Type.Literal("gm"),
+  Type.Literal("viewer"),
+  Type.Literal("player")
+]);
+export type SaveAccessRole = Static<typeof SaveAccessRoleSchema>;
+
+export const SaveAccessSchema = Type.Object({
+  saveId: IdSchema,
+  userId: IdSchema,
+  role: SaveAccessRoleSchema,
+  characterId: Type.Optional(IdSchema)
+});
+export type SaveAccess = Static<typeof SaveAccessSchema>;
+
+export const SaveCollaboratorSchema = Type.Object({
+  saveId: IdSchema,
+  userId: IdSchema,
+  username: Type.String({ minLength: 1 }),
+  role: Type.Union([Type.Literal("gm"), Type.Literal("viewer"), Type.Literal("player")]),
+  characterId: Type.Optional(IdSchema),
+  createdAt: Type.String(),
+  updatedAt: Type.String()
+});
+export type SaveCollaborator = Static<typeof SaveCollaboratorSchema>;
+
+export const UpsertSaveCollaboratorInputSchema = Type.Object({
+  username: Type.String({ minLength: 1 }),
+  role: Type.Union([Type.Literal("gm"), Type.Literal("viewer"), Type.Literal("player")]),
+  characterId: Type.Optional(IdSchema)
+});
+export type UpsertSaveCollaboratorInput = Static<typeof UpsertSaveCollaboratorInputSchema>;
+
+export const PatchSaveCollaboratorInputSchema = Type.Partial(
+  Type.Object({
+    role: Type.Union([Type.Literal("gm"), Type.Literal("viewer"), Type.Literal("player")]),
+    characterId: Type.Optional(IdSchema)
+  })
+);
+export type PatchSaveCollaboratorInput = Static<typeof PatchSaveCollaboratorInputSchema>;
+
+export const PlayerInputStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("approved"),
+  Type.Literal("rejected"),
+  Type.Literal("used")
+]);
+export type PlayerInputStatus = Static<typeof PlayerInputStatusSchema>;
+
+export const PlayerInputSchema = Type.Object({
+  id: IdSchema,
+  saveId: IdSchema,
+  userId: IdSchema,
+  username: Type.String({ minLength: 1 }),
+  characterId: IdSchema,
+  intent: Type.String({ minLength: 1 }),
+  status: PlayerInputStatusSchema,
+  createdAt: Type.String(),
+  reviewedByUserId: Type.Optional(IdSchema),
+  reviewedAt: Type.Optional(Type.String()),
+  reviewNote: Type.Optional(Type.String()),
+  turnJobId: Type.Optional(IdSchema)
+});
+export type PlayerInput = Static<typeof PlayerInputSchema>;
+
+export const CreatePlayerInputSchema = Type.Object({
+  intent: Type.String({ minLength: 1 })
+});
+export type CreatePlayerInput = Static<typeof CreatePlayerInputSchema>;
+
+export const ReviewPlayerInputSchema = Type.Object({
+  status: Type.Union([Type.Literal("approved"), Type.Literal("rejected")]),
+  reviewNote: Type.Optional(Type.String())
+});
+export type ReviewPlayerInput = Static<typeof ReviewPlayerInputSchema>;
+
 export const SaveSettingsSchema = Type.Object({
   language: LanguageSchema,
   turnTimeScale: Type.String(),

@@ -86,3 +86,28 @@ export const users = pgTable(
   },
   (table) => [uniqueIndex("users_username_unique").on(table.username)]
 );
+
+export const saveCollaborators = pgTable(
+  "save_collaborators",
+  {
+    id: text("id").primaryKey(),
+    saveId: text("save_id").notNull(),
+    userId: text("user_id").notNull(),
+    role: text("role").notNull(),
+    characterId: text("character_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => [uniqueIndex("save_collaborators_save_user_unique").on(table.saveId, table.userId)]
+);
+
+export const playerInputs = pgTable("player_inputs", {
+  id: text("id").primaryKey(),
+  saveId: text("save_id").notNull(),
+  userId: text("user_id").notNull(),
+  characterId: text("character_id").notNull(),
+  status: text("status").notNull(),
+  data: jsonb("data").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+});

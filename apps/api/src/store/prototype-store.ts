@@ -1,5 +1,6 @@
 import type {
   Character,
+  CreatePlayerInput,
   CreateSaveInput,
   CreateTurnInput,
   CreateCharacterInput,
@@ -17,13 +18,19 @@ import type {
   Relationship,
   RelationshipPatch,
   PatchTurnDraftInput,
+  PlayerInput,
+  PlayerInputStatus,
+  ReviewPlayerInput,
   Save,
+  SaveAccess,
+  SaveCollaborator,
   SaveGenerationJob,
   SaveListItem,
   Turn,
   TurnOrchestrationOutput,
   TurnDraftState,
   TurnJob,
+  UpsertSaveCollaboratorInput,
   User
 } from "@fantasy-world/shared";
 import { CURRENT_SAVE_SCHEMA_VERSION, getWorldTemplate } from "@fantasy-world/shared";
@@ -94,6 +101,8 @@ export function mergeModelCredentials(
 export class PrototypeStore implements FantasyWorldStore {
   private readonly users = new Map<string, User>([[defaultUser.id, defaultUser]]);
   private readonly saves = new Map<string, Save>();
+  private readonly collaborators = new Map<string, SaveCollaborator>();
+  private readonly playerInputs = new Map<string, PlayerInput>();
   private readonly generationJobs = new Map<string, SaveGenerationJob>();
   private readonly turnJobs = new Map<string, TurnJob>();
   private readonly rollbackSnapshots = new Map<string, Save[]>();
@@ -263,7 +272,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
   listSaves(ownerUserId = defaultUser.id): SaveListItem[] {
     return [...this.saves.values()]
-      .filter((save) => ownerMatches(save.ownerUserId, ownerUserId))
+      .filter((save) => Boolean(this.getSaveAccess(save.id, ownerUserId)))
       .map((save) => ({
         id: save.id,
         ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
@@ -282,6 +291,188 @@ export class PrototypeStore implements FantasyWorldStore {
       return undefined;
     }
     return save ? structuredClone(save) : undefined;
+  }
+
+  getSaveAccess(saveId: string, userId: string): SaveAccess | undefined {
+    const save = this.saves.get(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (ownerMatches(save.ownerUserId, userId)) {
+      return {
+        saveId,
+        userId,
+        role: "owner"
+      };
+    }
+
+    const collaborator = this.collaborators.get(collaboratorKey(saveId, userId));
+
+    if (!collaborator) {
+      return undefined;
+    }
+
+    return {
+      saveId,
+      userId,
+      role: collaborator.role,
+      ...(collaborator.characterId ? { characterId: collaborator.characterId } : {})
+    };
+  }
+
+  listCollaborators(saveId: string): SaveCollaborator[] {
+    return [...this.collaborators.values()]
+      .filter((collaborator) => collaborator.saveId === saveId)
+      .map((collaborator) => structuredClone(collaborator));
+  }
+
+  upsertCollaborator(saveId: string, user: User, input: UpsertSaveCollaboratorInput): SaveCollaborator | undefined {
+    const save = this.saves.get(saveId);
+
+    if (!save || ownerMatches(save.ownerUserId, user.id)) {
+      return undefined;
+    }
+
+    const characterId = resolveCollaboratorCharacterId(save, input);
+
+    if (characterId === false) {
+      return undefined;
+    }
+
+    const existing = this.collaborators.get(collaboratorKey(saveId, user.id));
+    const timestamp = now();
+    const collaborator: SaveCollaborator = {
+      saveId,
+      userId: user.id,
+      username: user.username,
+      role: input.role,
+      ...(characterId ? { characterId } : {}),
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp
+    };
+
+    this.collaborators.set(collaboratorKey(saveId, user.id), collaborator);
+    return structuredClone(collaborator);
+  }
+
+  patchCollaborator(
+    saveId: string,
+    userId: string,
+    input: Partial<UpsertSaveCollaboratorInput>
+  ): SaveCollaborator | undefined {
+    const save = this.saves.get(saveId);
+    const existing = this.collaborators.get(collaboratorKey(saveId, userId));
+
+    if (!save || !existing) {
+      return undefined;
+    }
+
+    const nextCharacterId = input.characterId ?? existing.characterId;
+    const nextInput = {
+      username: existing.username,
+      role: input.role ?? existing.role,
+      ...(nextCharacterId ? { characterId: nextCharacterId } : {})
+    };
+    const characterId = resolveCollaboratorCharacterId(save, nextInput);
+
+    if (characterId === false) {
+      return undefined;
+    }
+
+    const collaborator: SaveCollaborator = {
+      ...existing,
+      role: nextInput.role,
+      ...(characterId ? { characterId } : {}),
+      updatedAt: now()
+    };
+
+    if (!characterId) {
+      delete collaborator.characterId;
+    }
+
+    this.collaborators.set(collaboratorKey(saveId, userId), collaborator);
+    return structuredClone(collaborator);
+  }
+
+  removeCollaborator(saveId: string, userId: string): boolean {
+    return this.collaborators.delete(collaboratorKey(saveId, userId));
+  }
+
+  createPlayerInput(saveId: string, user: User, input: CreatePlayerInput): PlayerInput | undefined {
+    const access = this.getSaveAccess(saveId, user.id);
+    const save = this.saves.get(saveId);
+
+    if (!save || access?.role !== "player" || !access.characterId) {
+      return undefined;
+    }
+
+    if (!save.characters.some((character) => character.id === access.characterId)) {
+      return undefined;
+    }
+
+    const playerInput: PlayerInput = {
+      id: id("player_input"),
+      saveId,
+      userId: user.id,
+      username: user.username,
+      characterId: access.characterId,
+      intent: input.intent,
+      status: "pending",
+      createdAt: now()
+    };
+
+    this.playerInputs.set(playerInput.id, playerInput);
+    return structuredClone(playerInput);
+  }
+
+  listPlayerInputs(saveId: string, userId?: string, status?: PlayerInputStatus): PlayerInput[] {
+    return [...this.playerInputs.values()]
+      .filter(
+        (input) =>
+          input.saveId === saveId && (!userId || input.userId === userId) && (!status || input.status === status)
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((input) => structuredClone(input));
+  }
+
+  getPlayerInput(inputId: string): PlayerInput | undefined {
+    const input = this.playerInputs.get(inputId);
+    return input ? structuredClone(input) : undefined;
+  }
+
+  reviewPlayerInput(inputId: string, reviewerUserId: string, input: ReviewPlayerInput): PlayerInput | undefined {
+    const existing = this.playerInputs.get(inputId);
+
+    if (!existing || existing.status === "used") {
+      return undefined;
+    }
+
+    const reviewed: PlayerInput = {
+      ...existing,
+      status: input.status,
+      reviewedByUserId: reviewerUserId,
+      reviewedAt: now(),
+      ...(input.reviewNote ? { reviewNote: input.reviewNote } : {})
+    };
+
+    this.playerInputs.set(inputId, reviewed);
+    return structuredClone(reviewed);
+  }
+
+  markPlayerInputsUsed(saveId: string, inputIds: string[], turnJobId: string): void {
+    const ids = new Set(inputIds);
+
+    for (const input of this.playerInputs.values()) {
+      if (input.saveId === saveId && ids.has(input.id) && input.status === "approved") {
+        this.playerInputs.set(input.id, {
+          ...input,
+          status: "used",
+          turnJobId
+        });
+      }
+    }
   }
 
   createQueuedGenerationJob(input: CreateSaveInput, ownerUserId = defaultUser.id): SaveGenerationJob {
@@ -1213,6 +1404,11 @@ export class PrototypeStore implements FantasyWorldStore {
     }
     return job ? structuredClone(job) : undefined;
   }
+
+  getTurnJobByTurnId(turnId: string): TurnJob | undefined {
+    const job = [...this.turnJobs.values()].find((item) => item.turn?.id === turnId);
+    return job ? structuredClone(job) : undefined;
+  }
 }
 
 export const prototypeStore = new PrototypeStore();
@@ -1435,6 +1631,25 @@ function normalizeUsername(value: string) {
 
 function ownerMatches(ownerUserId: string | undefined, requestedUserId: string) {
   return (ownerUserId ?? defaultUser.id) === requestedUserId;
+}
+
+function collaboratorKey(saveId: string, userId: string) {
+  return `${saveId}:${userId}`;
+}
+
+function resolveCollaboratorCharacterId(
+  save: Save,
+  input: Pick<UpsertSaveCollaboratorInput, "role" | "characterId">
+): string | false | undefined {
+  if (input.role !== "player") {
+    return undefined;
+  }
+
+  if (!input.characterId || !save.characters.some((character) => character.id === input.characterId)) {
+    return false;
+  }
+
+  return input.characterId;
 }
 
 export function isActiveJobStatus(status: JobStatus) {

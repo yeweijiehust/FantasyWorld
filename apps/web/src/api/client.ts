@@ -1,5 +1,6 @@
 import type {
   CharacterPatch,
+  CreatePlayerInput,
   CreateCharacterInput,
   CreateLocationInput,
   CreateRelationshipInput,
@@ -10,14 +11,18 @@ import type {
   ModelProbeInput,
   ModelProbeResult,
   PatchTurnDraftInput,
+  PlayerInput,
+  ReviewPlayerInput,
   RelationshipPatch,
   Save,
+  SaveCollaborator,
   SaveExport,
   SaveImport,
   SaveGenerationJob,
   SaveListItem,
   Session,
-  TurnJob
+  TurnJob,
+  UpsertSaveCollaboratorInput
 } from "@fantasy-world/shared";
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
@@ -60,6 +65,18 @@ export const api = {
   updateSaveModelConfig: (id: string, body: Partial<ModelConfig> & { apiKey?: string }) =>
     request<Save>(`/api/saves/${id}/model-config`, { method: "PUT", body }),
   clearSaveModelConfig: (id: string) => request<Save>(`/api/saves/${id}/model-config`, { method: "DELETE" }),
+  collaborators: (saveId: string) => request<SaveCollaborator[]>(`/api/saves/${saveId}/collaborators`),
+  upsertCollaborator: (saveId: string, body: UpsertSaveCollaboratorInput) =>
+    request<SaveCollaborator>(`/api/saves/${saveId}/collaborators`, { method: "POST", body }),
+  patchCollaborator: (saveId: string, userId: string, body: Partial<UpsertSaveCollaboratorInput>) =>
+    request<SaveCollaborator>(`/api/saves/${saveId}/collaborators/${userId}`, { method: "PATCH", body }),
+  removeCollaborator: (saveId: string, userId: string) =>
+    request<{ removed: boolean }>(`/api/saves/${saveId}/collaborators/${userId}`, { method: "DELETE" }),
+  playerInputs: (saveId: string) => request<PlayerInput[]>(`/api/saves/${saveId}/player-inputs`),
+  createPlayerInput: (saveId: string, body: CreatePlayerInput) =>
+    request<PlayerInput>(`/api/saves/${saveId}/player-inputs`, { method: "POST", body }),
+  reviewPlayerInput: (id: string, body: ReviewPlayerInput) =>
+    request<PlayerInput>(`/api/player-inputs/${id}/review`, { method: "POST", body }),
   saves: () => request<SaveListItem[]>("/api/saves"),
   save: (id: string) => request<Save>(`/api/saves/${id}`),
   patchSave: (id: string, body: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>) =>

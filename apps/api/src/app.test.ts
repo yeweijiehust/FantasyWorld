@@ -13,7 +13,9 @@ import { createTurnOrchestration } from "./turn/orchestrator.js";
 import type {
   ModelConfig,
   ModelProbeResult,
+  PlayerInput,
   Save,
+  SaveCollaborator,
   SaveExport,
   SaveGenerationJob,
   SaveListItem,
@@ -408,6 +410,203 @@ describe("FantasyWorld API auth and model config safety", () => {
       }
     });
     expect(bobAcceptAliceGeneration.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it("supports GM, viewer, and player collaboration permissions", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const ownerCookie = await login(app, "owner");
+    const gmCookie = await login(app, "gm-user");
+    const viewerCookie = await login(app, "viewer-user");
+    const playerCookie = await login(app, "player-user");
+    const save = await createAcceptedSave(app, ownerCookie, "Collaborative World");
+    const playerCharacter = save.characters[0];
+
+    expect(playerCharacter).toBeDefined();
+
+    const gmInvite = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/collaborators`,
+      headers: {
+        cookie: ownerCookie
+      },
+      payload: {
+        username: "gm-user",
+        role: "gm"
+      }
+    });
+    expect(gmInvite.statusCode).toBe(201);
+    expect(gmInvite.json<SaveCollaborator>()).toMatchObject({ username: "gm-user", role: "gm" });
+
+    const viewerInvite = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/collaborators`,
+      headers: {
+        cookie: ownerCookie
+      },
+      payload: {
+        username: "viewer-user",
+        role: "viewer"
+      }
+    });
+    expect(viewerInvite.statusCode).toBe(201);
+
+    const playerInvite = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/collaborators`,
+      headers: {
+        cookie: gmCookie
+      },
+      payload: {
+        username: "player-user",
+        role: "player",
+        characterId: playerCharacter?.id
+      }
+    });
+    expect(playerInvite.statusCode).toBe(201);
+    expect(playerInvite.json<SaveCollaborator>()).toMatchObject({
+      username: "player-user",
+      role: "player",
+      characterId: playerCharacter?.id
+    });
+
+    const gmSaves = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie: gmCookie
+      }
+    });
+    expect(gmSaves.statusCode).toBe(200);
+    expect(gmSaves.json<SaveListItem[]>()[0]?.id).toBe(save.id);
+
+    const gmRead = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie: gmCookie
+      }
+    });
+    expect(gmRead.statusCode).toBe(200);
+    expect(gmRead.json<Save>().characters[0]?.secrets.length).toBeGreaterThan(0);
+
+    const viewerRead = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie: viewerCookie
+      }
+    });
+    expect(viewerRead.statusCode).toBe(200);
+
+    const viewerEdit = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie: viewerCookie
+      },
+      payload: {
+        name: "Viewer cannot rename"
+      }
+    });
+    expect(viewerEdit.statusCode).toBe(404);
+
+    const playerRead = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie: playerCookie
+      }
+    });
+    expect(playerRead.statusCode).toBe(200);
+    const playerView = playerRead.json<Save>();
+    expect(playerView.characters.some((character) => character.id === playerCharacter?.id)).toBe(true);
+    expect(
+      playerView.characters.find((character) => character.id === playerCharacter?.id)?.secrets.length
+    ).toBeGreaterThan(0);
+    expect(
+      playerView.characters
+        .filter((character) => character.id !== playerCharacter?.id)
+        .every((character) => character.secrets.length === 0 && character.privateMemory.length === 0)
+    ).toBe(true);
+
+    const playerEdit = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${save.id}`,
+      headers: {
+        cookie: playerCookie
+      },
+      payload: {
+        name: "Player cannot rename"
+      }
+    });
+    expect(playerEdit.statusCode).toBe(404);
+
+    const submittedInput = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/player-inputs`,
+      headers: {
+        cookie: playerCookie
+      },
+      payload: {
+        intent: "Search the old pier for the missing lantern."
+      }
+    });
+    expect(submittedInput.statusCode).toBe(201);
+    expect(submittedInput.json<PlayerInput>()).toMatchObject({
+      username: "player-user",
+      characterId: playerCharacter?.id,
+      status: "pending"
+    });
+
+    const viewerInputs = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}/player-inputs`,
+      headers: {
+        cookie: viewerCookie
+      }
+    });
+    expect(viewerInputs.statusCode).toBe(404);
+
+    const approvedInput = await app.inject({
+      method: "POST",
+      url: `/api/player-inputs/${submittedInput.json<PlayerInput>().id}/review`,
+      headers: {
+        cookie: gmCookie
+      },
+      payload: {
+        status: "approved"
+      }
+    });
+    expect(approvedInput.statusCode).toBe(200);
+    expect(approvedInput.json<PlayerInput>().status).toBe("approved");
+
+    const gmTurn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${save.id}/turns`,
+      headers: {
+        cookie: gmCookie
+      },
+      payload: {
+        gmInstruction: "Focus on approved player agency."
+      }
+    });
+    expect(gmTurn.statusCode).toBe(201);
+    expect(gmTurn.json<TurnJob>().input?.gmInstruction).toContain("Search the old pier");
+
+    const inputsAfterTurn = await app.inject({
+      method: "GET",
+      url: `/api/saves/${save.id}/player-inputs`,
+      headers: {
+        cookie: gmCookie
+      }
+    });
+    expect(inputsAfterTurn.statusCode).toBe(200);
+    expect(inputsAfterTurn.json<PlayerInput[]>()[0]).toMatchObject({
+      status: "used",
+      turnJobId: gmTurn.json<TurnJob>().id
+    });
 
     await app.close();
   });

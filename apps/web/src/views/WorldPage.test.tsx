@@ -29,6 +29,13 @@ const apiMock = vi.hoisted(() => ({
   saveModelConfig: vi.fn(),
   updateSaveModelConfig: vi.fn(),
   clearSaveModelConfig: vi.fn(),
+  collaborators: vi.fn(),
+  upsertCollaborator: vi.fn(),
+  patchCollaborator: vi.fn(),
+  removeCollaborator: vi.fn(),
+  playerInputs: vi.fn(),
+  createPlayerInput: vi.fn(),
+  reviewPlayerInput: vi.fn(),
   patchSave: vi.fn(),
   patchCharacter: vi.fn(),
   createCharacter: vi.fn(),
@@ -161,6 +168,8 @@ describe("WorldPage", () => {
     apiMock.save.mockResolvedValue(makeSave());
     apiMock.updateSaveModelConfig.mockResolvedValue(makeSave());
     apiMock.clearSaveModelConfig.mockResolvedValue(makeSave());
+    apiMock.collaborators.mockResolvedValue([]);
+    apiMock.playerInputs.mockResolvedValue([]);
   });
 
   it("renders the create wizard and keeps world language separate from UI language", async () => {

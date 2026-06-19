@@ -22,7 +22,7 @@ API、SSE 回合进度流和 React 构建后的静态文件。第一版优先做
 - i18n：`react-i18next` 管 UI 中英切换；存档生成语言作为业务字段传给后端。
 - Database：Postgres + Drizzle ORM，使用显式迁移文件。
 - Local database：Docker Compose 提供本地 Postgres。
-- Auth：单用户密码门，HTTP-only cookie session。
+- Auth：HTTP-only cookie session；v1 单用户密码门，Post-v1 增加 username、save ownership 和协作角色。
 - Secrets：用户模型 API key 服务端加密后存 Postgres，前端只显示配置状态和尾号。
 - LLM：OpenAI-compatible 协议，用户配置 base URL、API key、model；使用 OpenAI SDK 薄封装。
 - Long jobs：创建存档和推进回合都使用任务表 + SSE，支持取消、重试和 idempotency key。
@@ -112,6 +112,13 @@ FantasyWorld/
 - `PATCH /api/saves/:id/relationships/:relationshipId`
 - `DELETE /api/saves/:id/relationships/:relationshipId`
 - `PATCH /api/saves/:id/world-memory`
+- `GET /api/saves/:id/collaborators`
+- `POST /api/saves/:id/collaborators`
+- `PATCH /api/saves/:id/collaborators/:userId`
+- `DELETE /api/saves/:id/collaborators/:userId`
+- `GET /api/saves/:id/player-inputs`
+- `POST /api/saves/:id/player-inputs`
+- `POST /api/player-inputs/:id/review`
 - `POST /api/save-generation-jobs`
 - `GET /api/save-generation-jobs/:id`
 - `GET /api/save-generation-jobs/:id/events`
@@ -131,10 +138,12 @@ FantasyWorld/
 
 ## Database Model
 
-- 核心表：`users`、`saves`、`characters`、`locations`、`relationships`、`turns`、`turn_jobs`、`save_generation_jobs`、`model_configs`、`sessions`。
+- 核心表：`users`、`saves`、`save_collaborators`、`player_inputs`、`characters`、`locations`、`relationships`、`turns`、`turn_jobs`、`save_generation_jobs`、`model_configs`、`sessions`。
 - 核心对象使用关系表，便于查询、局部编辑和 UI 展示。
 - Post-v1 Step 10 引入 `users`、`saves.owner_user_id` 和 `sessions.user_id`；旧单管理员数据迁移到
   `user_admin`，读取层仍把空 owner 当作默认 admin 兼容。
+- Post-v1 Step 11 引入 `save_collaborators` 和
+  `player_inputs`；协作者角色为 GM、Viewer、Player，Player 可绑定角色并提交待审核输入。
 - 每回合保存完整 JSONB snapshot，用于回滚、导入导出和调试。
 - 每个存档保存 `saveSeed`，每回合 snapshot 保存派生的 `turnSeed`，用于回滚、调试和测试复现。
 - 存档 JSON、回合 snapshot、prompt、schema 都记录版本；导入旧版本时运行迁移器，无法迁移时拒绝导入并返回明确错误。
@@ -167,7 +176,8 @@ FantasyWorld/
 - 当前过渡认证仍使用部署级共享管理员密码，不做公开注册、邮箱验证或自助改密；不同 username 用于隔离存档 owner。
 - 管理员密码 hash 由 `pnpm auth:hash` 生成并通过 `ADMIN_PASSWORD_HASH` 提供，运行时不读取明文管理员密码。
 - 登录成功后发 HTTP-only cookie session，前端不保存 bearer token。
-- 用户只能访问自己 owner 的 save、generation job 和 turn job；旧 owner 为空的数据按 `user_admin` 兼容。
+- 用户只能访问自己 owner 或被授权协作的 save；owner/GM 可编辑和推进，Viewer 只读，Player 只能读取绑定角色范围并提交待审核输入。
+- 旧 owner 为空的数据按 `user_admin` 兼容；协作授权不赋予全局模型配置或新存档创建权限之外的额外系统权限。
 - 用户模型 API key 用 `ENCRYPTION_KEY` 加密后存 Postgres。
 - 前端读取模型配置时只显示 provider/base URL/model、是否已配置 key、key 尾号。
 

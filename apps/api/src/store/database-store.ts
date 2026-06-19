@@ -6,6 +6,7 @@ import {
   type CharacterPatch,
   type CreateCharacterInput,
   type CreateLocationInput,
+  type CreatePlayerInput,
   type CreateRelationshipInput,
   type CreateSaveInput,
   type CreateTurnInput,
@@ -17,15 +18,21 @@ import {
   type ModelConfig,
   type ModelConfigUpdate,
   type PatchTurnDraftInput,
+  type PlayerInput,
+  type PlayerInputStatus,
+  type ReviewPlayerInput,
   type Relationship,
   type RelationshipPatch,
   type Save,
+  type SaveAccess,
+  type SaveCollaborator,
   type SaveGenerationJob,
   type SaveListItem,
   type StateChange,
   type Turn,
   type TurnOrchestrationOutput,
   type TurnJob,
+  type UpsertSaveCollaboratorInput,
   type User,
   type WorldMemory
 } from "@fantasy-world/shared";
@@ -298,18 +305,23 @@ export class DatabaseStore implements FantasyWorldStore {
   }
 
   async listSaves(ownerUserId = defaultUser.id): Promise<SaveListItem[]> {
-    const [saveRows, characterRows] = await Promise.all([
+    const [saveRows, characterRows, collaboratorRows] = await Promise.all([
       this.db.select().from(dbSchema.saves).orderBy(desc(dbSchema.saves.updatedAt)),
-      this.db.select({ saveId: dbSchema.characters.saveId }).from(dbSchema.characters)
+      this.db.select({ saveId: dbSchema.characters.saveId }).from(dbSchema.characters),
+      this.db
+        .select({ saveId: dbSchema.saveCollaborators.saveId })
+        .from(dbSchema.saveCollaborators)
+        .where(eq(dbSchema.saveCollaborators.userId, ownerUserId))
     ]);
     const characterCounts = new Map<string, number>();
+    const collaboratorSaveIds = new Set(collaboratorRows.map((row) => row.saveId));
 
     for (const row of characterRows) {
       characterCounts.set(row.saveId, (characterCounts.get(row.saveId) ?? 0) + 1);
     }
 
     return saveRows
-      .filter((save) => ownerMatches(save.ownerUserId, ownerUserId))
+      .filter((save) => ownerMatches(save.ownerUserId, ownerUserId) || collaboratorSaveIds.has(save.id))
       .map((save) => ({
         id: save.id,
         ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
@@ -325,6 +337,262 @@ export class DatabaseStore implements FantasyWorldStore {
   async getSave(saveId: string, ownerUserId?: string): Promise<Save | undefined> {
     const save = await this.readSave(saveId);
     return save && (!ownerUserId || ownerMatches(save.ownerUserId, ownerUserId)) ? save : undefined;
+  }
+
+  async getSaveAccess(saveId: string, userId: string): Promise<SaveAccess | undefined> {
+    const save = await this.db.query.saves.findFirst({
+      where: eq(dbSchema.saves.id, saveId)
+    });
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (ownerMatches(save.ownerUserId, userId)) {
+      return {
+        saveId,
+        userId,
+        role: "owner"
+      };
+    }
+
+    const collaborator = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!collaborator) {
+      return undefined;
+    }
+
+    return {
+      saveId,
+      userId,
+      role: normalizeCollaboratorRole(collaborator.role),
+      ...(collaborator.characterId ? { characterId: collaborator.characterId } : {})
+    };
+  }
+
+  async listCollaborators(saveId: string): Promise<SaveCollaborator[]> {
+    const [rows, users] = await Promise.all([
+      this.db.select().from(dbSchema.saveCollaborators).where(eq(dbSchema.saveCollaborators.saveId, saveId)),
+      this.db.select().from(dbSchema.users)
+    ]);
+    const usernames = new Map(users.map((user) => [user.id, user.username]));
+
+    return rows.map((row) => rowToCollaborator(row, usernames.get(row.userId) ?? row.userId));
+  }
+
+  async upsertCollaborator(
+    saveId: string,
+    user: User,
+    input: UpsertSaveCollaboratorInput
+  ): Promise<SaveCollaborator | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || ownerMatches(save.ownerUserId, user.id)) {
+      return undefined;
+    }
+
+    const characterId = resolveCollaboratorCharacterId(save, input);
+
+    if (characterId === false) {
+      return undefined;
+    }
+
+    const existing = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, user.id))
+    });
+    const timestamp = new Date();
+
+    if (existing) {
+      await this.db
+        .update(dbSchema.saveCollaborators)
+        .set({
+          role: input.role,
+          characterId: characterId ?? null,
+          updatedAt: timestamp
+        })
+        .where(eq(dbSchema.saveCollaborators.id, existing.id));
+    } else {
+      await this.db.insert(dbSchema.saveCollaborators).values({
+        id: id("collaborator"),
+        saveId,
+        userId: user.id,
+        role: input.role,
+        characterId: characterId ?? null,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    }
+
+    return this.getCollaborator(saveId, user.id);
+  }
+
+  async patchCollaborator(
+    saveId: string,
+    userId: string,
+    input: Partial<UpsertSaveCollaboratorInput>
+  ): Promise<SaveCollaborator | undefined> {
+    const save = await this.readSave(saveId);
+    const existing = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!save || !existing) {
+      return undefined;
+    }
+
+    const nextRole = input.role ?? normalizeCollaboratorRole(existing.role);
+    const nextCharacterId = input.characterId ?? existing.characterId ?? undefined;
+    const characterId = resolveCollaboratorCharacterId(save, {
+      role: nextRole,
+      ...(nextCharacterId ? { characterId: nextCharacterId } : {})
+    });
+
+    if (characterId === false) {
+      return undefined;
+    }
+
+    await this.db
+      .update(dbSchema.saveCollaborators)
+      .set({
+        role: nextRole,
+        characterId: characterId ?? null,
+        updatedAt: new Date()
+      })
+      .where(eq(dbSchema.saveCollaborators.id, existing.id));
+
+    return this.getCollaborator(saveId, userId);
+  }
+
+  async removeCollaborator(saveId: string, userId: string): Promise<boolean> {
+    const existing = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!existing) {
+      return false;
+    }
+
+    await this.db.delete(dbSchema.saveCollaborators).where(eq(dbSchema.saveCollaborators.id, existing.id));
+    return true;
+  }
+
+  async createPlayerInput(saveId: string, user: User, input: CreatePlayerInput): Promise<PlayerInput | undefined> {
+    const access = await this.getSaveAccess(saveId, user.id);
+    const save = await this.readSave(saveId);
+
+    if (!save || access?.role !== "player" || !access.characterId) {
+      return undefined;
+    }
+
+    if (!save.characters.some((character) => character.id === access.characterId)) {
+      return undefined;
+    }
+
+    const createdAt = now();
+    const playerInput: PlayerInput = {
+      id: id("player_input"),
+      saveId,
+      userId: user.id,
+      username: user.username,
+      characterId: access.characterId,
+      intent: input.intent,
+      status: "pending",
+      createdAt
+    };
+
+    await this.db.insert(dbSchema.playerInputs).values({
+      id: playerInput.id,
+      saveId,
+      userId: user.id,
+      characterId: access.characterId,
+      status: playerInput.status,
+      data: playerInput,
+      createdAt: new Date(createdAt),
+      updatedAt: new Date(createdAt)
+    });
+
+    return structuredClone(playerInput);
+  }
+
+  async listPlayerInputs(saveId: string, userId?: string, status?: PlayerInputStatus): Promise<PlayerInput[]> {
+    const rows = await this.db.select().from(dbSchema.playerInputs).where(eq(dbSchema.playerInputs.saveId, saveId));
+
+    return rows
+      .map((row) => row.data as PlayerInput)
+      .filter((input) => (!userId || input.userId === userId) && (!status || input.status === status))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((input) => structuredClone(input));
+  }
+
+  async getPlayerInput(inputId: string): Promise<PlayerInput | undefined> {
+    const row = await this.db.query.playerInputs.findFirst({
+      where: eq(dbSchema.playerInputs.id, inputId)
+    });
+
+    return row ? structuredClone(row.data as PlayerInput) : undefined;
+  }
+
+  async reviewPlayerInput(
+    inputId: string,
+    reviewerUserId: string,
+    input: ReviewPlayerInput
+  ): Promise<PlayerInput | undefined> {
+    const row = await this.db.query.playerInputs.findFirst({
+      where: eq(dbSchema.playerInputs.id, inputId)
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const current = row.data as PlayerInput;
+
+    if (current.status === "used") {
+      return undefined;
+    }
+
+    const reviewed: PlayerInput = {
+      ...current,
+      status: input.status,
+      reviewedByUserId: reviewerUserId,
+      reviewedAt: now(),
+      ...(input.reviewNote ? { reviewNote: input.reviewNote } : {})
+    };
+
+    await this.db
+      .update(dbSchema.playerInputs)
+      .set({ status: reviewed.status, data: reviewed, updatedAt: new Date() })
+      .where(eq(dbSchema.playerInputs.id, inputId));
+
+    return structuredClone(reviewed);
+  }
+
+  async markPlayerInputsUsed(saveId: string, inputIds: string[], turnJobId: string): Promise<void> {
+    const ids = new Set(inputIds);
+    const rows = await this.db.select().from(dbSchema.playerInputs).where(eq(dbSchema.playerInputs.saveId, saveId));
+
+    await this.db.transaction(async (tx) => {
+      for (const row of rows) {
+        const input = row.data as PlayerInput;
+
+        if (!ids.has(input.id) || input.status !== "approved") {
+          continue;
+        }
+
+        const used: PlayerInput = {
+          ...input,
+          status: "used",
+          turnJobId
+        };
+
+        await tx
+          .update(dbSchema.playerInputs)
+          .set({ status: used.status, data: used, updatedAt: new Date() })
+          .where(eq(dbSchema.playerInputs.id, row.id));
+      }
+    });
   }
 
   async createQueuedGenerationJob(input: CreateSaveInput, ownerUserId = defaultUser.id): Promise<SaveGenerationJob> {
@@ -1419,6 +1687,12 @@ export class DatabaseStore implements FantasyWorldStore {
     return job && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId)) ? structuredClone(job) : undefined;
   }
 
+  async getTurnJobByTurnId(turnId: string): Promise<TurnJob | undefined> {
+    const rows = await this.db.select().from(dbSchema.turnJobs);
+    const row = rows.find((item) => (item.data as TurnJob).turn?.id === turnId);
+    return row ? structuredClone(row.data as TurnJob) : undefined;
+  }
+
   async getGenerationJobByIdempotencyKey(
     idempotencyKey: string,
     ownerUserId?: string
@@ -1451,6 +1725,22 @@ export class DatabaseStore implements FantasyWorldStore {
     const row = rows.find((item) => isActiveJobStatus((item.data as TurnJob).status));
 
     return row ? structuredClone(row.data as TurnJob) : undefined;
+  }
+
+  private async getCollaborator(saveId: string, userId: string): Promise<SaveCollaborator | undefined> {
+    const row = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const user = await this.db.query.users.findFirst({
+      where: eq(dbSchema.users.id, userId)
+    });
+
+    return rowToCollaborator(row, user?.username ?? userId);
   }
 
   private async readSave(saveId: string): Promise<Save | undefined> {
@@ -1744,6 +2034,47 @@ function relationshipCharactersExist(save: Save, sourceCharacterId: string, targ
     save.characters.some((character) => character.id === sourceCharacterId) &&
     save.characters.some((character) => character.id === targetCharacterId)
   );
+}
+
+function rowToCollaborator(
+  row: {
+    saveId: string;
+    userId: string;
+    role: string;
+    characterId: string | null;
+    createdAt: Date | string;
+    updatedAt: Date | string;
+  },
+  username: string
+): SaveCollaborator {
+  return {
+    saveId: row.saveId,
+    userId: row.userId,
+    username,
+    role: normalizeCollaboratorRole(row.role),
+    ...(row.characterId ? { characterId: row.characterId } : {}),
+    createdAt: toIso(row.createdAt),
+    updatedAt: toIso(row.updatedAt)
+  };
+}
+
+function normalizeCollaboratorRole(role: string): SaveCollaborator["role"] {
+  return role === "gm" || role === "viewer" || role === "player" ? role : "viewer";
+}
+
+function resolveCollaboratorCharacterId(
+  save: Save,
+  input: Pick<UpsertSaveCollaboratorInput, "role" | "characterId">
+): string | false | undefined {
+  if (input.role !== "player") {
+    return undefined;
+  }
+
+  if (!input.characterId || !save.characters.some((character) => character.id === input.characterId)) {
+    return false;
+  }
+
+  return input.characterId;
 }
 
 function normalizeUsername(value: string) {

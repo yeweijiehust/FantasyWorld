@@ -13,6 +13,7 @@ import {
   type CreateSaveInput,
   CreateCharacterInputSchema,
   CreateLocationInputSchema,
+  CreatePlayerInputSchema,
   CreateRelationshipInputSchema,
   CreateSaveInputSchema,
   type CreateTurnInput,
@@ -26,8 +27,14 @@ import {
   ModelProbeInputSchema,
   ModelProbeResultSchema,
   PatchTurnDraftInputSchema,
+  PatchSaveCollaboratorInputSchema,
+  type PlayerInput,
+  PlayerInputSchema,
   RelationshipPatchSchema,
+  ReviewPlayerInputSchema,
   SaveExportSchema,
+  type SaveAccess,
+  SaveCollaboratorSchema,
   SaveGenerationJobSchema,
   SaveImportSchema,
   SaveListItemSchema,
@@ -35,7 +42,9 @@ import {
   SaveSchema,
   SessionSchema,
   TurnJobSchema,
-  TurnOrchestrationOutputSchema
+  TurnOrchestrationOutputSchema,
+  UpsertSaveCollaboratorInputSchema,
+  type User
 } from "@fantasy-world/shared";
 import Fastify, { type FastifyError } from "fastify";
 import { Type } from "typebox";
@@ -61,6 +70,8 @@ const SaveParamsSchema = Type.Object({ id: Type.String() });
 const CharacterParamsSchema = Type.Object({ id: Type.String(), characterId: Type.String() });
 const LocationParamsSchema = Type.Object({ id: Type.String(), locationId: Type.String() });
 const RelationshipParamsSchema = Type.Object({ id: Type.String(), relationshipId: Type.String() });
+const CollaboratorParamsSchema = Type.Object({ id: Type.String(), userId: Type.String() });
+const PlayerInputParamsSchema = Type.Object({ id: Type.String() });
 const LoginBodySchema = Type.Object({
   username: Type.Optional(Type.String()),
   password: Type.String()
@@ -283,9 +294,18 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const save = await store.getSave(request.params.id, user.id);
-      return save ?? sendError(reply, 404, "not_found", "Save not found");
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, [
+        "owner",
+        "gm",
+        "viewer",
+        "player"
+      ]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      return saveForAccess(context.save, context.access);
     }
   );
 
@@ -302,11 +322,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.patchSave(request.params.id, request.body);
@@ -326,9 +345,18 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const save = await store.getSave(request.params.id, user.id);
-      return save ?? sendError(reply, 404, "not_found", "Save not found");
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, [
+        "owner",
+        "gm",
+        "viewer",
+        "player"
+      ]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      return saveForAccess(context.save, context.access);
     }
   );
 
@@ -344,9 +372,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const save = await store.getSave(request.params.id, user.id);
-      return save ? createSaveExport(save) : sendError(reply, 404, "not_found", "Save not found");
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      return createSaveExport(context.save);
     }
   );
 
@@ -362,11 +394,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const save = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm", "viewer"]);
 
-      if (!save) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       return (await store.getSaveModelConfig(request.params.id)) ?? (await store.getModelConfig());
@@ -386,11 +417,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.updateSaveModelConfig(request.params.id, request.body);
@@ -410,11 +440,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.clearSaveModelConfig(request.params.id);
@@ -458,11 +487,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "No rollback snapshot available"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "No rollback snapshot available");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.rollbackSave(request.params.id);
@@ -483,11 +518,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.patchSave(request.params.id, { settings: request.body });
@@ -508,11 +542,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Save or location not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save or location not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.createCharacter(request.params.id, request.body);
@@ -539,11 +579,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Character not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Character not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.patchCharacter(request.params.id, request.params.characterId, request.body);
@@ -563,11 +609,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Character not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Character not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.deleteCharacter(request.params.id, request.params.characterId);
@@ -588,11 +640,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.createLocation(request.params.id, request.body);
@@ -619,11 +670,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Location not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Location not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.patchLocation(request.params.id, request.params.locationId, request.body);
@@ -643,11 +700,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Location not found or still in use"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Location not found or still in use");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.deleteLocation(request.params.id, request.params.locationId);
@@ -668,11 +731,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Save or relationship character not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save or relationship character not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.createRelationship(request.params.id, request.body);
@@ -699,11 +768,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Relationship not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Relationship not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.patchRelationship(request.params.id, request.params.relationshipId, request.body);
@@ -723,11 +798,17 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        request.params.id,
+        ["owner", "gm"],
+        "Relationship not found"
+      );
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Relationship not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.deleteRelationship(request.params.id, request.params.relationshipId);
@@ -748,15 +829,204 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!existing) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const save = await store.patchSave(request.params.id, { worldMemory: request.body });
       return save ?? sendError(reply, 404, "not_found", "Save not found");
+    }
+  );
+
+  app.get(
+    "/api/saves/:id/collaborators",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        response: {
+          200: Type.Array(SaveCollaboratorSchema),
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      return store.listCollaborators(request.params.id);
+    }
+  );
+
+  app.post(
+    "/api/saves/:id/collaborators",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        body: UpsertSaveCollaboratorInputSchema,
+        response: {
+          201: SaveCollaboratorSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const user = await store.getOrCreateUser(request.body.username);
+      const collaborator = await store.upsertCollaborator(request.params.id, user, request.body);
+
+      if (!collaborator) {
+        return sendError(reply, 404, "not_found", "Save, collaborator, or character not found");
+      }
+
+      reply.code(201);
+      return collaborator;
+    }
+  );
+
+  app.patch(
+    "/api/saves/:id/collaborators/:userId",
+    {
+      schema: {
+        params: CollaboratorParamsSchema,
+        body: PatchSaveCollaboratorInputSchema,
+        response: {
+          200: SaveCollaboratorSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const collaborator = await store.patchCollaborator(request.params.id, request.params.userId, request.body);
+      return collaborator ?? sendError(reply, 404, "not_found", "Collaborator or character not found");
+    }
+  );
+
+  app.delete(
+    "/api/saves/:id/collaborators/:userId",
+    {
+      schema: {
+        params: CollaboratorParamsSchema,
+        response: {
+          200: Type.Object({ removed: Type.Boolean() }),
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const removed = await store.removeCollaborator(request.params.id, request.params.userId);
+      return removed ? { removed } : sendError(reply, 404, "not_found", "Collaborator not found");
+    }
+  );
+
+  app.get(
+    "/api/saves/:id/player-inputs",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        response: {
+          200: Type.Array(PlayerInputSchema),
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm", "player"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const userId = context.access.role === "player" ? context.user.id : undefined;
+      return store.listPlayerInputs(request.params.id, userId);
+    }
+  );
+
+  app.post(
+    "/api/saves/:id/player-inputs",
+    {
+      schema: {
+        params: SaveParamsSchema,
+        body: CreatePlayerInputSchema,
+        response: {
+          201: PlayerInputSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["player"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const input = await store.createPlayerInput(request.params.id, context.user, request.body);
+
+      if (!input) {
+        return sendError(reply, 404, "not_found", "Player character binding not found");
+      }
+
+      reply.code(201);
+      return input;
+    }
+  );
+
+  app.post(
+    "/api/player-inputs/:id/review",
+    {
+      schema: {
+        params: PlayerInputParamsSchema,
+        body: ReviewPlayerInputSchema,
+        response: {
+          200: PlayerInputSchema,
+          404: ApiErrorSchema
+        }
+      }
+    },
+    async (request, reply) => {
+      const playerInput = await store.getPlayerInput(request.params.id);
+
+      if (!playerInput) {
+        return sendError(reply, 404, "not_found", "Player input not found");
+      }
+
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        playerInput.saveId,
+        ["owner", "gm"],
+        "Player input not found"
+      );
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const reviewed = await store.reviewPlayerInput(request.params.id, context.user.id, request.body);
+      return reviewed ?? sendError(reply, 404, "not_found", "Player input not found");
     }
   );
 
@@ -961,18 +1231,20 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const save = await store.getSave(request.params.id, user.id);
+      const context = await getAuthorizedSave(store, request, reply, request.params.id, ["owner", "gm"]);
 
-      if (!save) {
-        return sendError(reply, 404, "not_found", "Save not found");
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
+
+      const save = context.save;
+      const turnOwnerUserId = save.ownerUserId ?? defaultUser.id;
 
       if (request.body.idempotencyKey) {
         const existing = await store.getTurnJobByIdempotencyKey(
           request.params.id,
           request.body.idempotencyKey,
-          user.id
+          turnOwnerUserId
         );
 
         if (existing) {
@@ -994,19 +1266,27 @@ export function buildApp(options: BuildAppOptions) {
         return active;
       }
 
+      const approvedPlayerInputs = await store.listPlayerInputs(request.params.id, undefined, "approved");
+      const turnInput = turnInputWithPlayerInputs(save, request.body, approvedPlayerInputs);
+
       if (jobExecution === "background") {
-        const job = await store.createQueuedTurnJob(request.params.id, request.body);
+        const job = await store.createQueuedTurnJob(request.params.id, turnInput);
 
         if (!job) {
           return sendError(reply, 404, "not_found", "Save not found");
         }
 
+        await store.markPlayerInputsUsed(
+          request.params.id,
+          approvedPlayerInputs.map((input) => input.id),
+          job.id
+        );
         worker.scheduleTurn(job.id);
         reply.code(201);
         return job;
       }
 
-      const orchestration = await generateTurnDraft(llmService, save, request.body);
+      const orchestration = await generateTurnDraft(llmService, save, turnInput);
       const llmCall = toLlmCallSummary(orchestration);
 
       if (!orchestration.ok) {
@@ -1014,20 +1294,32 @@ export function buildApp(options: BuildAppOptions) {
           orchestration.error.code === "invalid_llm_reference" ? "validating_turn_references" : "generating_turn_draft";
         const job = await store.createFailedTurnJob(
           request.params.id,
-          request.body,
+          turnInput,
           toJobFailure(failurePhase, orchestration),
           llmCall
         );
+        if (job) {
+          await store.markPlayerInputsUsed(
+            request.params.id,
+            approvedPlayerInputs.map((input) => input.id),
+            job.id
+          );
+        }
         reply.code(201);
         return job ?? sendError(reply, 404, "not_found", "Save not found");
       }
 
-      const job = await store.createTurnJob(request.params.id, request.body, orchestration.output, llmCall);
+      const job = await store.createTurnJob(request.params.id, turnInput, orchestration.output, llmCall);
 
       if (!job) {
         return sendError(reply, 404, "not_found", "Save not found");
       }
 
+      await store.markPlayerInputsUsed(
+        request.params.id,
+        approvedPlayerInputs.map((input) => input.id),
+        job.id
+      );
       reply.code(201);
       return job;
     }
@@ -1045,9 +1337,19 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const job = await store.getTurnJob(request.params.id, user.id);
-      return job ?? sendError(reply, 404, "not_found", "Turn job not found");
+      const job = await store.getTurnJob(request.params.id);
+
+      if (!job) {
+        return sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
+      const context = await getAuthorizedSave(store, request, reply, job.saveId, ["owner", "gm", "viewer"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
+      return job;
     }
   );
 
@@ -1059,8 +1361,21 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      return sendJobSse(reply, async () => store.getTurnJob(request.params.id, user.id), {
+      const initialJob = await store.getTurnJob(request.params.id);
+
+      if (!initialJob) {
+        return sendJobSse(reply, () => Promise.resolve(undefined), {
+          error: { code: "not_found", message: "Turn job not found" }
+        });
+      }
+
+      const context = await getAuthorizedSave(store, request, reply, initialJob.saveId, ["owner", "gm", "viewer"]);
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      return sendJobSse(reply, async () => store.getTurnJob(request.params.id), {
         error: { code: "not_found", message: "Turn job not found" }
       });
     }
@@ -1079,11 +1394,23 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getTurnJob(request.params.id, user.id);
+      const existing = await store.getTurnJob(request.params.id);
 
       if (!existing) {
         return sendError(reply, 404, "not_found", "Editable turn draft not found");
+      }
+
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        existing.saveId,
+        ["owner", "gm"],
+        "Editable turn draft not found"
+      );
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const job = await store.patchTurnDraft(request.params.id, request.body);
@@ -1103,11 +1430,23 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const existing = await store.getTurnJob(request.params.id, user.id);
+      const existing = await store.getTurnJob(request.params.id);
 
       if (!existing) {
         return sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        existing.saveId,
+        ["owner", "gm"],
+        "Turn job not found"
+      );
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       const job = await store.cancelTurnJob(request.params.id);
@@ -1127,11 +1466,23 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const current = await store.getTurnJob(request.params.id, user.id);
+      const current = await store.getTurnJob(request.params.id);
 
       if (!current) {
         return sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
+      const context = await getAuthorizedSave(
+        store,
+        request,
+        reply,
+        current.saveId,
+        ["owner", "gm"],
+        "Turn job not found"
+      );
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
       }
 
       if (
@@ -1143,7 +1494,7 @@ export function buildApp(options: BuildAppOptions) {
         return current;
       }
 
-      const save = await store.getSave(current.saveId, user.id);
+      const save = context.save;
 
       if (!save) {
         return sendError(reply, 404, "not_found", "Save not found");
@@ -1186,8 +1537,19 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const user = await getRequestUser(store, request);
-      const save = await store.acceptTurn(request.params.id, user.id);
+      const job = await store.getTurnJobByTurnId(request.params.id);
+
+      if (!job) {
+        return sendError(reply, 404, "not_found", "Turn not found");
+      }
+
+      const context = await getAuthorizedSave(store, request, reply, job.saveId, ["owner", "gm"], "Turn not found");
+
+      if (!isAuthorizedSaveContext(context)) {
+        return context;
+      }
+
+      const save = await store.acceptTurn(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Turn not found");
     }
   );
@@ -1211,6 +1573,128 @@ type RequestWithCookies = {
 
 async function getRequestUser(store: FantasyWorldStore, request: RequestWithCookies) {
   return (await store.getSessionUser(request.cookies.fw_session)) ?? defaultUser;
+}
+
+type AuthorizedSaveContext = {
+  user: User;
+  access: SaveAccess;
+  save: Save;
+};
+
+type SaveAccessRole = SaveAccess["role"];
+type ErrorPayload = {
+  error: {
+    code: string;
+    message: string;
+  };
+};
+
+async function getAuthorizedSave(
+  store: FantasyWorldStore,
+  request: RequestWithCookies,
+  reply: ReplyWithCode<404>,
+  saveId: string,
+  roles: SaveAccessRole[],
+  message = "Save not found"
+): Promise<AuthorizedSaveContext | ErrorPayload> {
+  const user = await getRequestUser(store, request);
+  const access = await store.getSaveAccess(saveId, user.id);
+
+  if (!access || !roles.includes(access.role)) {
+    return sendError(reply, 404, "not_found", message);
+  }
+
+  const save = await store.getSave(saveId);
+
+  if (!save) {
+    return sendError(reply, 404, "not_found", message);
+  }
+
+  return { user, access, save };
+}
+
+function isAuthorizedSaveContext(value: AuthorizedSaveContext | ErrorPayload): value is AuthorizedSaveContext {
+  return "save" in value;
+}
+
+function saveForAccess(save: Save, access: SaveAccess) {
+  return access.role === "player" ? saveForPlayer(save, access.characterId) : save;
+}
+
+function saveForPlayer(save: Save, characterId: string | undefined): Save {
+  const visibleCharacter = characterId ? save.characters.find((character) => character.id === characterId) : undefined;
+
+  if (!visibleCharacter) {
+    return {
+      ...save,
+      characters: [],
+      locations: [],
+      relationships: [],
+      worldMemory: {
+        ...save.worldMemory,
+        locationSummaries: {}
+      }
+    };
+  }
+
+  const locationIds = new Set([visibleCharacter.locationId]);
+  const visibleRelationshipCharacters = new Set([visibleCharacter.id]);
+  const relationships = save.relationships.filter(
+    (relationship) =>
+      relationship.sourceCharacterId === visibleCharacter.id || relationship.targetCharacterId === visibleCharacter.id
+  );
+
+  for (const relationship of relationships) {
+    visibleRelationshipCharacters.add(relationship.sourceCharacterId);
+    visibleRelationshipCharacters.add(relationship.targetCharacterId);
+  }
+
+  const characters = save.characters
+    .filter((character) => visibleRelationshipCharacters.has(character.id))
+    .map((character) =>
+      character.id === visibleCharacter.id
+        ? character
+        : {
+            ...character,
+            secrets: [],
+            privateMemory: []
+          }
+    );
+  const locations = save.locations.filter((location) => locationIds.has(location.id));
+  const locationSummaries = Object.fromEntries(
+    Object.entries(save.worldMemory.locationSummaries).filter(([locationId]) => locationIds.has(locationId))
+  );
+
+  return {
+    ...save,
+    characters,
+    locations,
+    relationships,
+    worldMemory: {
+      ...save.worldMemory,
+      locationSummaries
+    }
+  };
+}
+
+function turnInputWithPlayerInputs(save: Save, input: CreateTurnInput, playerInputs: PlayerInput[]): CreateTurnInput {
+  if (playerInputs.length === 0) {
+    return input;
+  }
+
+  const lines = playerInputs.map((playerInput) => {
+    const character = save.characters.find((item) => item.id === playerInput.characterId);
+    return `- ${character?.name ?? playerInput.username} (${playerInput.username}): ${playerInput.intent}`;
+  });
+  const reviewedBlock =
+    save.settings.language === "zh"
+      ? `已获 GM 审核的玩家输入：\n${lines.join("\n")}`
+      : `GM-approved player inputs:\n${lines.join("\n")}`;
+
+  return {
+    ...input,
+    gmInstruction: [input.gmInstruction, reviewedBlock].filter(Boolean).join("\n\n")
+  };
 }
 
 function resolveWebDistRoot() {

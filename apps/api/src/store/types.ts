@@ -2,6 +2,7 @@ import type {
   CharacterPatch,
   CreateCharacterInput,
   CreateLocationInput,
+  CreatePlayerInput,
   CreateRelationshipInput,
   CreateSaveInput,
   CreateTurnInput,
@@ -12,12 +13,18 @@ import type {
   ModelConfig,
   ModelConfigUpdate,
   PatchTurnDraftInput,
+  PlayerInput,
+  PlayerInputStatus,
+  ReviewPlayerInput,
   RelationshipPatch,
   Save,
+  SaveAccess,
+  SaveCollaborator,
   SaveGenerationJob,
   SaveListItem,
   TurnOrchestrationOutput,
   TurnJob,
+  UpsertSaveCollaboratorInput,
   User
 } from "@fantasy-world/shared";
 
@@ -55,6 +62,32 @@ export type FantasyWorldStore = {
   clearSaveModelConfig(saveId: string): Save | undefined | Promise<Save | undefined>;
   listSaves(ownerUserId?: string): SaveListItem[] | Promise<SaveListItem[]>;
   getSave(saveId: string, ownerUserId?: string): Save | undefined | Promise<Save | undefined>;
+  getSaveAccess(saveId: string, userId: string): SaveAccess | undefined | Promise<SaveAccess | undefined>;
+  listCollaborators(saveId: string): SaveCollaborator[] | Promise<SaveCollaborator[]>;
+  upsertCollaborator(
+    saveId: string,
+    user: User,
+    input: UpsertSaveCollaboratorInput
+  ): SaveCollaborator | undefined | Promise<SaveCollaborator | undefined>;
+  patchCollaborator(
+    saveId: string,
+    userId: string,
+    input: Partial<UpsertSaveCollaboratorInput>
+  ): SaveCollaborator | undefined | Promise<SaveCollaborator | undefined>;
+  removeCollaborator(saveId: string, userId: string): boolean | Promise<boolean>;
+  createPlayerInput(
+    saveId: string,
+    user: User,
+    input: CreatePlayerInput
+  ): PlayerInput | undefined | Promise<PlayerInput | undefined>;
+  listPlayerInputs(saveId: string, userId?: string, status?: PlayerInputStatus): PlayerInput[] | Promise<PlayerInput[]>;
+  getPlayerInput(inputId: string): PlayerInput | undefined | Promise<PlayerInput | undefined>;
+  reviewPlayerInput(
+    inputId: string,
+    reviewerUserId: string,
+    input: ReviewPlayerInput
+  ): PlayerInput | undefined | Promise<PlayerInput | undefined>;
+  markPlayerInputsUsed(saveId: string, inputIds: string[], turnJobId: string): void | Promise<void>;
   createQueuedGenerationJob(
     input: CreateSaveInput,
     ownerUserId?: string
@@ -166,4 +199,5 @@ export type FantasyWorldStore = {
   acceptTurn(turnId: string, ownerUserId?: string): Save | undefined | Promise<Save | undefined>;
   rollbackSave(saveId: string): Save | undefined | Promise<Save | undefined>;
   getTurnJob(jobId: string, ownerUserId?: string): TurnJob | undefined | Promise<TurnJob | undefined>;
+  getTurnJobByTurnId(turnId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
 };
