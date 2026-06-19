@@ -5,15 +5,18 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api/client.js";
 
 type LoginForm = {
+  username: string;
   password: string;
 };
 
 export function LoginPanel() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { register, handleSubmit } = useForm<LoginForm>({ defaultValues: { password: "fantasyworld" } });
+  const { register, handleSubmit } = useForm<LoginForm>({
+    defaultValues: { username: "admin", password: "fantasyworld" }
+  });
   const login = useMutation({
-    mutationFn: (values: LoginForm) => api.login(values.password),
+    mutationFn: (values: LoginForm) => api.login(values.password, values.username),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["session"] });
     }
@@ -35,11 +38,22 @@ export function LoginPanel() {
           </div>
         </div>
         <label className="grid gap-2 text-sm font-medium text-slate-700">
+          {t("login.username")}
+          <input
+            className="h-10 rounded-md border border-slate-300 px-3 text-slate-950 outline-none focus:border-slate-950"
+            aria-label={t("login.username")}
+            type="text"
+            autoComplete="username"
+            {...register("username", { required: true })}
+          />
+        </label>
+        <label className="mt-4 grid gap-2 text-sm font-medium text-slate-700">
           {t("login.password")}
           <input
             className="h-10 rounded-md border border-slate-300 px-3 text-slate-950 outline-none focus:border-slate-950"
             aria-label={t("login.password")}
             type="password"
+            autoComplete="current-password"
             {...register("password", { required: true })}
           />
         </label>

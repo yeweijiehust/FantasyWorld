@@ -131,8 +131,10 @@ FantasyWorld/
 
 ## Database Model
 
-- 核心表：`saves`、`characters`、`locations`、`relationships`、`turns`、`turn_jobs`、`save_generation_jobs`、`model_configs`、`sessions`。
+- 核心表：`users`、`saves`、`characters`、`locations`、`relationships`、`turns`、`turn_jobs`、`save_generation_jobs`、`model_configs`、`sessions`。
 - 核心对象使用关系表，便于查询、局部编辑和 UI 展示。
+- Post-v1 Step 10 引入 `users`、`saves.owner_user_id` 和 `sessions.user_id`；旧单管理员数据迁移到
+  `user_admin`，读取层仍把空 owner 当作默认 admin 兼容。
 - 每回合保存完整 JSONB snapshot，用于回滚、导入导出和调试。
 - 每个存档保存 `saveSeed`，每回合 snapshot 保存派生的 `turnSeed`，用于回滚、调试和测试复现。
 - 存档 JSON、回合 snapshot、prompt、schema 都记录版本；导入旧版本时运行迁移器，无法迁移时拒绝导入并返回明确错误。
@@ -161,9 +163,11 @@ FantasyWorld/
 
 ## Auth And Secrets
 
-- 第一版是单用户部署实例，不做注册、多用户和公开账号体系。
+- v1 是单用户部署实例；Post-v1 Step 10 引入轻量多用户身份、session-user 绑定和 save ownership。
+- 当前过渡认证仍使用部署级共享管理员密码，不做公开注册、邮箱验证或自助改密；不同 username 用于隔离存档 owner。
 - 管理员密码 hash 由 `pnpm auth:hash` 生成并通过 `ADMIN_PASSWORD_HASH` 提供，运行时不读取明文管理员密码。
 - 登录成功后发 HTTP-only cookie session，前端不保存 bearer token。
+- 用户只能访问自己 owner 的 save、generation job 和 turn job；旧 owner 为空的数据按 `user_admin` 兼容。
 - 用户模型 API key 用 `ENCRYPTION_KEY` 加密后存 Postgres。
 - 前端读取模型配置时只显示 provider/base URL/model、是否已配置 key、key 尾号。
 

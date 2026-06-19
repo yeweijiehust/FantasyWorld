@@ -17,6 +17,7 @@ const resources = {
       },
       login: {
         subtitle: "Single-player GM console",
+        username: "Username",
         password: "Admin password",
         enter: "Enter",
         signingIn: "Signing in..."
@@ -118,6 +119,7 @@ const resources = {
       },
       login: {
         subtitle: "单人 GM 控制台",
+        username: "用户名",
         password: "管理员密码",
         enter: "进入",
         signingIn: "正在进入..."

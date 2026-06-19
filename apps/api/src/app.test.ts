@@ -45,11 +45,12 @@ const productionEnv = {
   DATA_STORE: "postgres"
 };
 
-async function login(app: ReturnType<typeof buildApp>) {
+async function login(app: ReturnType<typeof buildApp>, username = "admin") {
   const response = await app.inject({
     method: "POST",
     url: "/api/auth/login",
     payload: {
+      username,
       password: "fantasyworld"
     }
   });
@@ -245,6 +246,168 @@ describe("FantasyWorld API auth and model config safety", () => {
       }
     });
     expect(afterLogout.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("binds sessions to users and isolates saves and jobs by owner", async () => {
+    const app = buildApp({ env, store: new PrototypeStore() });
+    const aliceCookie = await login(app, "alice");
+    const bobCookie = await login(app, "bob");
+
+    const aliceSession = await app.inject({
+      method: "GET",
+      url: "/api/auth/session",
+      headers: {
+        cookie: aliceCookie
+      }
+    });
+    expect(aliceSession.statusCode).toBe(200);
+    expect(aliceSession.json<{ user?: { username: string; role: string } }>().user).toMatchObject({
+      username: "alice",
+      role: "player"
+    });
+
+    const aliceSave = await createAcceptedSave(app, aliceCookie, "Alice World");
+    expect(aliceSave.ownerUserId).toBeDefined();
+
+    const aliceList = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie: aliceCookie
+      }
+    });
+    expect(aliceList.statusCode).toBe(200);
+    expect(aliceList.json<SaveListItem[]>()).toHaveLength(1);
+    expect(aliceList.json<SaveListItem[]>()[0]?.id).toBe(aliceSave.id);
+
+    const bobList = await app.inject({
+      method: "GET",
+      url: "/api/saves",
+      headers: {
+        cookie: bobCookie
+      }
+    });
+    expect(bobList.statusCode).toBe(200);
+    expect(bobList.json<SaveListItem[]>()).toHaveLength(0);
+
+    const bobReadAliceSave = await app.inject({
+      method: "GET",
+      url: `/api/saves/${aliceSave.id}`,
+      headers: {
+        cookie: bobCookie
+      }
+    });
+    expect(bobReadAliceSave.statusCode).toBe(404);
+
+    const bobMutateAliceSave = await app.inject({
+      method: "PATCH",
+      url: `/api/saves/${aliceSave.id}`,
+      headers: {
+        cookie: bobCookie
+      },
+      payload: {
+        name: "Not Bob's World"
+      }
+    });
+    expect(bobMutateAliceSave.statusCode).toBe(404);
+
+    const aliceTurnResponse = await app.inject({
+      method: "POST",
+      url: `/api/saves/${aliceSave.id}/turns`,
+      headers: {
+        cookie: aliceCookie
+      },
+      payload: {
+        gmInstruction: "让港口的雾气突然变厚。"
+      }
+    });
+    expect(aliceTurnResponse.statusCode).toBe(201);
+    const aliceTurnJob = aliceTurnResponse.json<TurnJob>();
+    expect(aliceTurnJob.turn?.id).toBeDefined();
+
+    const bobCreateTurn = await app.inject({
+      method: "POST",
+      url: `/api/saves/${aliceSave.id}/turns`,
+      headers: {
+        cookie: bobCookie
+      },
+      payload: {
+        gmInstruction: "Bob should not reach this world."
+      }
+    });
+    expect(bobCreateTurn.statusCode).toBe(404);
+
+    const bobReadAliceTurnJob = await app.inject({
+      method: "GET",
+      url: `/api/turn-jobs/${aliceTurnJob.id}`,
+      headers: {
+        cookie: bobCookie
+      }
+    });
+    expect(bobReadAliceTurnJob.statusCode).toBe(404);
+
+    const bobAcceptAliceTurn = await app.inject({
+      method: "POST",
+      url: `/api/turns/${aliceTurnJob.turn?.id}/accept`,
+      headers: {
+        cookie: bobCookie
+      }
+    });
+    expect(bobAcceptAliceTurn.statusCode).toBe(404);
+
+    const createInput = {
+      templateId: "fantasy-frontier",
+      name: "Shared Key World",
+      premise: "Two users intentionally reuse an idempotency key.",
+      characterSeeds: ["Aria", "Borin", "Cato"],
+      settings: {
+        language: "en",
+        turnTimeScale: "scene",
+        randomness: 20,
+        contentBoundary: "PG-13",
+        styleGuide: "consistent"
+      },
+      idempotencyKey: "shared-create-key"
+    };
+    const aliceGeneration = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie: aliceCookie
+      },
+      payload: createInput
+    });
+    const bobGeneration = await app.inject({
+      method: "POST",
+      url: "/api/save-generation-jobs",
+      headers: {
+        cookie: bobCookie
+      },
+      payload: createInput
+    });
+    expect(aliceGeneration.statusCode).toBe(201);
+    expect(bobGeneration.statusCode).toBe(201);
+    expect(bobGeneration.json<SaveGenerationJob>().id).not.toBe(aliceGeneration.json<SaveGenerationJob>().id);
+
+    const bobReadAliceGeneration = await app.inject({
+      method: "GET",
+      url: `/api/save-generation-jobs/${aliceGeneration.json<SaveGenerationJob>().id}`,
+      headers: {
+        cookie: bobCookie
+      }
+    });
+    expect(bobReadAliceGeneration.statusCode).toBe(404);
+
+    const bobAcceptAliceGeneration = await app.inject({
+      method: "POST",
+      url: `/api/save-generation-jobs/${aliceGeneration.json<SaveGenerationJob>().id}/accept`,
+      headers: {
+        cookie: bobCookie
+      }
+    });
+    expect(bobAcceptAliceGeneration.statusCode).toBe(404);
 
     await app.close();
   });

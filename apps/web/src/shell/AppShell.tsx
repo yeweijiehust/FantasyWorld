@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LogOut } from "lucide-react";
+import { LogOut, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client.js";
@@ -43,6 +43,12 @@ export function AppShell({ nav, children }: AppShellProps) {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <nav className="flex items-center gap-4 text-sm font-medium text-slate-500">{nav}</nav>
+            {session.data.user ? (
+              <div className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700">
+                <UserRound size={16} />
+                <span>{session.data.user.username}</span>
+              </div>
+            ) : null}
             <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
               {t("nav.uiLanguage")}
               <select

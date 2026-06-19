@@ -17,7 +17,8 @@ import type {
   SaveGenerationJob,
   SaveListItem,
   TurnOrchestrationOutput,
-  TurnJob
+  TurnJob,
+  User
 } from "@fantasy-world/shared";
 
 export type ModelCredentials = ModelConfig & {
@@ -41,8 +42,10 @@ export type ModelCredentialsScope = {
 };
 
 export type FantasyWorldStore = {
-  createSession(): string | Promise<string>;
+  getOrCreateUser(username: string): User | Promise<User>;
+  createSession(userId?: string): string | Promise<string>;
   hasSession(sessionId: string | undefined): boolean | Promise<boolean>;
+  getSessionUser(sessionId: string | undefined): User | undefined | Promise<User | undefined>;
   deleteSession(sessionId: string): void | Promise<void>;
   getModelConfig(): ModelConfig | Promise<ModelConfig>;
   getModelCredentials(scope?: ModelCredentialsScope): ModelCredentials | Promise<ModelCredentials>;
@@ -50,23 +53,32 @@ export type FantasyWorldStore = {
   getSaveModelConfig(saveId: string): ModelConfig | undefined | Promise<ModelConfig | undefined>;
   updateSaveModelConfig(saveId: string, input: ModelConfigUpdate): Save | undefined | Promise<Save | undefined>;
   clearSaveModelConfig(saveId: string): Save | undefined | Promise<Save | undefined>;
-  listSaves(): SaveListItem[] | Promise<SaveListItem[]>;
-  getSave(saveId: string): Save | undefined | Promise<Save | undefined>;
-  createQueuedGenerationJob(input: CreateSaveInput): SaveGenerationJob | Promise<SaveGenerationJob>;
+  listSaves(ownerUserId?: string): SaveListItem[] | Promise<SaveListItem[]>;
+  getSave(saveId: string, ownerUserId?: string): Save | undefined | Promise<Save | undefined>;
+  createQueuedGenerationJob(
+    input: CreateSaveInput,
+    ownerUserId?: string
+  ): SaveGenerationJob | Promise<SaveGenerationJob>;
   createGenerationJob(
     input: CreateSaveInput,
     generatedDraft?: GeneratedWorldDraft,
-    llmCall?: LlmCallSummary
+    llmCall?: LlmCallSummary,
+    ownerUserId?: string
   ): SaveGenerationJob | Promise<SaveGenerationJob>;
   createFailedGenerationJob(
     input: CreateSaveInput,
     failure: JobFailure,
-    llmCall?: LlmCallSummary
+    llmCall?: LlmCallSummary,
+    ownerUserId?: string
   ): SaveGenerationJob | Promise<SaveGenerationJob>;
   getGenerationJobByIdempotencyKey(
-    idempotencyKey: string
+    idempotencyKey: string,
+    ownerUserId?: string
   ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
-  getGenerationJob(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
+  getGenerationJob(
+    jobId: string,
+    ownerUserId?: string
+  ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   listActiveGenerationJobs(): SaveGenerationJob[] | Promise<SaveGenerationJob[]>;
   startGenerationJob(
     jobId: string,
@@ -89,8 +101,8 @@ export type FantasyWorldStore = {
     llmCall?: LlmCallSummary
   ): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
   queueGenerationRetry(jobId: string): SaveGenerationJob | undefined | Promise<SaveGenerationJob | undefined>;
-  acceptGenerationJob(jobId: string): Save | undefined | Promise<Save | undefined>;
-  importSave(input: Save): Save | Promise<Save>;
+  acceptGenerationJob(jobId: string, ownerUserId?: string): Save | undefined | Promise<Save | undefined>;
+  importSave(input: Save, ownerUserId?: string): Save | Promise<Save>;
   patchSave(
     saveId: string,
     patch: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>
@@ -127,7 +139,8 @@ export type FantasyWorldStore = {
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   getTurnJobByIdempotencyKey(
     saveId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    ownerUserId?: string
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   getActiveTurnJob(saveId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
   listActiveTurnJobs(): TurnJob[] | Promise<TurnJob[]>;
@@ -150,7 +163,7 @@ export type FantasyWorldStore = {
     llmCall?: LlmCallSummary
   ): TurnJob | undefined | Promise<TurnJob | undefined>;
   queueTurnRetry(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
-  acceptTurn(turnId: string): Save | undefined | Promise<Save | undefined>;
+  acceptTurn(turnId: string, ownerUserId?: string): Save | undefined | Promise<Save | undefined>;
   rollbackSave(saveId: string): Save | undefined | Promise<Save | undefined>;
-  getTurnJob(jobId: string): TurnJob | undefined | Promise<TurnJob | undefined>;
+  getTurnJob(jobId: string, ownerUserId?: string): TurnJob | undefined | Promise<TurnJob | undefined>;
 };

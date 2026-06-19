@@ -26,6 +26,7 @@ import {
   type Turn,
   type TurnOrchestrationOutput,
   type TurnJob,
+  type User,
   type WorldMemory
 } from "@fantasy-world/shared";
 import * as dbSchema from "../db/schema.js";
@@ -35,6 +36,7 @@ import {
   buildSave,
   buildTurnDraft,
   defaultModelConfig,
+  defaultUser,
   id,
   isActiveJobStatus,
   mergeModelCredentials,
@@ -56,12 +58,37 @@ export class DatabaseStore implements FantasyWorldStore {
     private readonly encryptionKey: string
   ) {}
 
-  async createSession(): Promise<string> {
+  async getOrCreateUser(username: string): Promise<User> {
+    const normalized = normalizeUsername(username);
+    const existing = await this.db.query.users.findFirst({
+      where: eq(dbSchema.users.username, normalized)
+    });
+
+    if (existing) {
+      return rowToUser(existing);
+    }
+
+    const user: User = {
+      id: normalized === defaultUser.username ? defaultUser.id : id("user"),
+      username: normalized,
+      role: normalized === defaultUser.username ? "admin" : "player"
+    };
+
+    await this.db.insert(dbSchema.users).values({
+      ...user,
+      createdAt: new Date()
+    });
+
+    return structuredClone(user);
+  }
+
+  async createSession(userId = defaultUser.id): Promise<string> {
     const sessionId = id("session");
     const createdAt = new Date();
 
     await this.db.insert(dbSchema.sessions).values({
       id: sessionId,
+      userId,
       createdAt,
       expiresAt: new Date(createdAt.getTime() + sessionTtlMs)
     });
@@ -79,6 +106,27 @@ export class DatabaseStore implements FantasyWorldStore {
     });
 
     return Boolean(row);
+  }
+
+  async getSessionUser(sessionId: string | undefined): Promise<User | undefined> {
+    if (!sessionId) {
+      return undefined;
+    }
+
+    const row = await this.db.query.sessions.findFirst({
+      where: and(eq(dbSchema.sessions.id, sessionId), gt(dbSchema.sessions.expiresAt, new Date()))
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const userId = row.userId ?? defaultUser.id;
+    const user = await this.db.query.users.findFirst({
+      where: eq(dbSchema.users.id, userId)
+    });
+
+    return user ? rowToUser(user) : structuredClone(defaultUser);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -249,7 +297,7 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
-  async listSaves(): Promise<SaveListItem[]> {
+  async listSaves(ownerUserId = defaultUser.id): Promise<SaveListItem[]> {
     const [saveRows, characterRows] = await Promise.all([
       this.db.select().from(dbSchema.saves).orderBy(desc(dbSchema.saves.updatedAt)),
       this.db.select({ saveId: dbSchema.characters.saveId }).from(dbSchema.characters)
@@ -260,24 +308,28 @@ export class DatabaseStore implements FantasyWorldStore {
       characterCounts.set(row.saveId, (characterCounts.get(row.saveId) ?? 0) + 1);
     }
 
-    return saveRows.map((save) => ({
-      id: save.id,
-      name: save.name,
-      description: save.description,
-      language: (save.settings as Save["settings"]).language,
-      turnNumber: save.turnNumber,
-      characterCount: characterCounts.get(save.id) ?? 0,
-      updatedAt: toIso(save.updatedAt)
-    }));
+    return saveRows
+      .filter((save) => ownerMatches(save.ownerUserId, ownerUserId))
+      .map((save) => ({
+        id: save.id,
+        ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
+        name: save.name,
+        description: save.description,
+        language: (save.settings as Save["settings"]).language,
+        turnNumber: save.turnNumber,
+        characterCount: characterCounts.get(save.id) ?? 0,
+        updatedAt: toIso(save.updatedAt)
+      }));
   }
 
-  async getSave(saveId: string): Promise<Save | undefined> {
-    return this.readSave(saveId);
+  async getSave(saveId: string, ownerUserId?: string): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+    return save && (!ownerUserId || ownerMatches(save.ownerUserId, ownerUserId)) ? save : undefined;
   }
 
-  async createQueuedGenerationJob(input: CreateSaveInput): Promise<SaveGenerationJob> {
+  async createQueuedGenerationJob(input: CreateSaveInput, ownerUserId = defaultUser.id): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
-      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
@@ -286,6 +338,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
       status: "queued",
       phase: "queued",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -306,19 +359,21 @@ export class DatabaseStore implements FantasyWorldStore {
   async createGenerationJob(
     input: CreateSaveInput,
     generatedDraft?: GeneratedWorldDraft,
-    llmCall?: LlmCallSummary
+    llmCall?: LlmCallSummary,
+    ownerUserId = defaultUser.id
   ): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
-      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
       }
     }
 
-    const save = buildSave(input, generatedDraft);
+    const save = { ...buildSave(input, generatedDraft), ownerUserId };
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
       status: "needs_review",
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -346,10 +401,11 @@ export class DatabaseStore implements FantasyWorldStore {
   async createFailedGenerationJob(
     input: CreateSaveInput,
     failure: JobFailure,
-    llmCall?: LlmCallSummary
+    llmCall?: LlmCallSummary,
+    ownerUserId = defaultUser.id
   ): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
-      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
@@ -358,6 +414,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
       status: "failed",
       phase: failure.phase,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -378,12 +435,13 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  async getGenerationJob(jobId: string): Promise<SaveGenerationJob | undefined> {
+  async getGenerationJob(jobId: string, ownerUserId?: string): Promise<SaveGenerationJob | undefined> {
     const row = await this.db.query.saveGenerationJobs.findFirst({
       where: eq(dbSchema.saveGenerationJobs.id, jobId)
     });
 
-    return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
+    const job = row ? (row.data as SaveGenerationJob) : undefined;
+    return job && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId)) ? structuredClone(job) : undefined;
   }
 
   async listActiveGenerationJobs(): Promise<SaveGenerationJob[]> {
@@ -430,6 +488,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const completed: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
@@ -438,7 +497,7 @@ export class DatabaseStore implements FantasyWorldStore {
       draft: {
         id: id("draft"),
         input,
-        save: buildSave(input, generatedDraft),
+        save: { ...buildSave(input, generatedDraft), ownerUserId: job.ownerUserId ?? defaultUser.id },
         createdAt: now()
       }
     };
@@ -522,6 +581,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const retried: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
@@ -530,7 +590,7 @@ export class DatabaseStore implements FantasyWorldStore {
       draft: {
         id: id("draft"),
         input,
-        save: buildSave(input, generatedDraft),
+        save: { ...buildSave(input, generatedDraft), ownerUserId: job.ownerUserId ?? defaultUser.id },
         createdAt: now()
       }
     };
@@ -557,6 +617,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const queued: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "queued",
       phase: "queued",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
@@ -571,10 +632,15 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(queued);
   }
 
-  async acceptGenerationJob(jobId: string): Promise<Save | undefined> {
+  async acceptGenerationJob(jobId: string, ownerUserId?: string): Promise<Save | undefined> {
     const job = await this.getGenerationJob(jobId);
 
-    if (!job?.draft || job.status === "cancelled" || job.status === "failed") {
+    if (
+      !job?.draft ||
+      job.status === "cancelled" ||
+      job.status === "failed" ||
+      (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId))
+    ) {
       return undefined;
     }
 
@@ -599,8 +665,9 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(accepted.id);
   }
 
-  async importSave(input: Save): Promise<Save> {
+  async importSave(input: Save, ownerUserId = defaultUser.id): Promise<Save> {
     const save = remapImportedSave(input);
+    save.ownerUserId = ownerUserId;
 
     await this.insertSave(this.db, save);
 
@@ -866,7 +933,11 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = await this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = await this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
@@ -911,7 +982,11 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = await this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = await this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
@@ -927,6 +1002,7 @@ export class DatabaseStore implements FantasyWorldStore {
     const job: TurnJob = {
       id: id("turn_job"),
       saveId,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
       status: "queued",
       phase: "queued",
       input,
@@ -958,7 +1034,11 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = await this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = await this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
@@ -974,6 +1054,7 @@ export class DatabaseStore implements FantasyWorldStore {
     const job: TurnJob = {
       id: id("turn_job"),
       saveId,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
       status: "failed",
       phase: failure.phase,
       input,
@@ -1223,6 +1304,7 @@ export class DatabaseStore implements FantasyWorldStore {
     const queued: TurnJob = {
       id: job.id,
       saveId: job.saveId,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "queued",
       phase: "queued",
       input: job.input ?? {},
@@ -1243,7 +1325,7 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(queued);
   }
 
-  async acceptTurn(turnId: string): Promise<Save | undefined> {
+  async acceptTurn(turnId: string, ownerUserId?: string): Promise<Save | undefined> {
     const jobRows = await this.db.select().from(dbSchema.turnJobs);
     const jobRow = jobRows.find((row) => (row.data as TurnJob).turn?.id === turnId);
 
@@ -1252,6 +1334,10 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     const job = jobRow.data as TurnJob;
+
+    if (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId)) {
+      return undefined;
+    }
 
     if (job.status === "accepted") {
       return this.readSave(job.saveId);
@@ -1324,24 +1410,38 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
-  async getTurnJob(jobId: string): Promise<TurnJob | undefined> {
+  async getTurnJob(jobId: string, ownerUserId?: string): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
     });
 
-    return row ? structuredClone(row.data as TurnJob) : undefined;
+    const job = row ? (row.data as TurnJob) : undefined;
+    return job && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId)) ? structuredClone(job) : undefined;
   }
 
-  async getGenerationJobByIdempotencyKey(idempotencyKey: string): Promise<SaveGenerationJob | undefined> {
+  async getGenerationJobByIdempotencyKey(
+    idempotencyKey: string,
+    ownerUserId?: string
+  ): Promise<SaveGenerationJob | undefined> {
     const rows = await this.db.select().from(dbSchema.saveGenerationJobs);
-    const row = rows.find((item) => (item.data as SaveGenerationJob).idempotencyKey === idempotencyKey);
+    const row = rows.find((item) => {
+      const job = item.data as SaveGenerationJob;
+      return job.idempotencyKey === idempotencyKey && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId));
+    });
 
     return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
   }
 
-  async getTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): Promise<TurnJob | undefined> {
+  async getTurnJobByIdempotencyKey(
+    saveId: string,
+    idempotencyKey: string,
+    ownerUserId?: string
+  ): Promise<TurnJob | undefined> {
     const rows = await this.db.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, saveId));
-    const row = rows.find((item) => (item.data as TurnJob).idempotencyKey === idempotencyKey);
+    const row = rows.find((item) => {
+      const job = item.data as TurnJob;
+      return job.idempotencyKey === idempotencyKey && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId));
+    });
 
     return row ? structuredClone(row.data as TurnJob) : undefined;
   }
@@ -1375,6 +1475,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     return {
       id: save.id,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
       name: save.name,
       description: save.description,
       schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
@@ -1401,6 +1502,7 @@ export class DatabaseStore implements FantasyWorldStore {
   private async insertSave(db: Database | Transaction, save: Save) {
     await db.insert(dbSchema.saves).values({
       id: save.id,
+      ownerUserId: save.ownerUserId ?? null,
       name: save.name,
       description: save.description,
       schemaVersion: save.schemaVersion,
@@ -1431,6 +1533,7 @@ export class DatabaseStore implements FantasyWorldStore {
       .update(dbSchema.saves)
       .set({
         name: save.name,
+        ownerUserId: save.ownerUserId ?? null,
         description: save.description,
         schemaVersion: save.schemaVersion,
         turnNumber: save.turnNumber,
@@ -1641,6 +1744,23 @@ function relationshipCharactersExist(save: Save, sourceCharacterId: string, targ
     save.characters.some((character) => character.id === sourceCharacterId) &&
     save.characters.some((character) => character.id === targetCharacterId)
   );
+}
+
+function normalizeUsername(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized || defaultUser.username;
+}
+
+function ownerMatches(ownerUserId: string | null | undefined, requestedUserId: string) {
+  return (ownerUserId ?? defaultUser.id) === requestedUserId;
+}
+
+function rowToUser(row: { id: string; username: string; role: string }): User {
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role === "admin" ? "admin" : "player"
+  };
 }
 
 function toIso(value: Date | string) {

@@ -23,7 +23,8 @@ import type {
   Turn,
   TurnOrchestrationOutput,
   TurnDraftState,
-  TurnJob
+  TurnJob,
+  User
 } from "@fantasy-world/shared";
 import { CURRENT_SAVE_SCHEMA_VERSION, getWorldTemplate } from "@fantasy-world/shared";
 import { clampRelationshipStrength, createTurnOrchestration } from "../turn/orchestrator.js";
@@ -41,6 +42,11 @@ export const defaultModelConfig: ModelConfig = {
   supportsStream: false
 };
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
+export const defaultUser: User = {
+  id: "user_admin",
+  username: "admin",
+  role: "admin"
+};
 
 export function publicSaveModelConfig(input: ModelConfig): ModelConfig {
   const next: ModelConfig = {
@@ -86,11 +92,12 @@ export function mergeModelCredentials(
 }
 
 export class PrototypeStore implements FantasyWorldStore {
+  private readonly users = new Map<string, User>([[defaultUser.id, defaultUser]]);
   private readonly saves = new Map<string, Save>();
   private readonly generationJobs = new Map<string, SaveGenerationJob>();
   private readonly turnJobs = new Map<string, TurnJob>();
   private readonly rollbackSnapshots = new Map<string, Save[]>();
-  private readonly sessions = new Map<string, number>();
+  private readonly sessions = new Map<string, { expiresAt: number; userId: string }>();
   private readonly saveModelApiKeys = new Map<string, string>();
   private modelConfig: ModelConfig = defaultModelConfig;
   private modelApiKey: string | undefined;
@@ -99,9 +106,26 @@ export class PrototypeStore implements FantasyWorldStore {
     return { authenticated: true };
   }
 
-  createSession() {
+  getOrCreateUser(username: string) {
+    const normalized = normalizeUsername(username);
+    const existing = [...this.users.values()].find((user) => user.username === normalized);
+
+    if (existing) {
+      return structuredClone(existing);
+    }
+
+    const user: User = {
+      id: id("user"),
+      username: normalized,
+      role: normalized === defaultUser.username ? "admin" : "player"
+    };
+    this.users.set(user.id, user);
+    return structuredClone(user);
+  }
+
+  createSession(userId = defaultUser.id) {
     const sessionId = id("session");
-    this.sessions.set(sessionId, Date.now() + sessionTtlMs);
+    this.sessions.set(sessionId, { expiresAt: Date.now() + sessionTtlMs, userId });
     return sessionId;
   }
 
@@ -110,7 +134,8 @@ export class PrototypeStore implements FantasyWorldStore {
       return false;
     }
 
-    const expiresAt = this.sessions.get(sessionId);
+    const session = this.sessions.get(sessionId);
+    const expiresAt = session?.expiresAt;
 
     if (!expiresAt || expiresAt <= Date.now()) {
       this.sessions.delete(sessionId);
@@ -118,6 +143,16 @@ export class PrototypeStore implements FantasyWorldStore {
     }
 
     return true;
+  }
+
+  getSessionUser(sessionId: string | undefined) {
+    if (!sessionId || !this.hasSession(sessionId)) {
+      return undefined;
+    }
+
+    const userId = this.sessions.get(sessionId)?.userId ?? defaultUser.id;
+    const user = this.users.get(userId) ?? defaultUser;
+    return structuredClone(user);
   }
 
   deleteSession(sessionId: string) {
@@ -226,26 +261,32 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(updated);
   }
 
-  listSaves(): SaveListItem[] {
-    return [...this.saves.values()].map((save) => ({
-      id: save.id,
-      name: save.name,
-      description: save.description,
-      language: save.settings.language,
-      turnNumber: save.turnNumber,
-      characterCount: save.characters.length,
-      updatedAt: save.updatedAt
-    }));
+  listSaves(ownerUserId = defaultUser.id): SaveListItem[] {
+    return [...this.saves.values()]
+      .filter((save) => ownerMatches(save.ownerUserId, ownerUserId))
+      .map((save) => ({
+        id: save.id,
+        ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
+        name: save.name,
+        description: save.description,
+        language: save.settings.language,
+        turnNumber: save.turnNumber,
+        characterCount: save.characters.length,
+        updatedAt: save.updatedAt
+      }));
   }
 
-  getSave(saveId: string): Save | undefined {
+  getSave(saveId: string, ownerUserId?: string): Save | undefined {
     const save = this.saves.get(saveId);
+    if (!save || (ownerUserId && !ownerMatches(save.ownerUserId, ownerUserId))) {
+      return undefined;
+    }
     return save ? structuredClone(save) : undefined;
   }
 
-  createQueuedGenerationJob(input: CreateSaveInput): SaveGenerationJob {
+  createQueuedGenerationJob(input: CreateSaveInput, ownerUserId = defaultUser.id): SaveGenerationJob {
     if (input.idempotencyKey) {
-      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
@@ -254,6 +295,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
       status: "queued",
       phase: "queued",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -267,19 +309,21 @@ export class PrototypeStore implements FantasyWorldStore {
   createGenerationJob(
     input: CreateSaveInput,
     generatedDraft?: GeneratedWorldDraft,
-    llmCall?: LlmCallSummary
+    llmCall?: LlmCallSummary,
+    ownerUserId = defaultUser.id
   ): SaveGenerationJob {
     if (input.idempotencyKey) {
-      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
       }
     }
 
-    const save = buildSave(input, generatedDraft);
+    const save = { ...buildSave(input, generatedDraft), ownerUserId };
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
       status: "needs_review",
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -297,9 +341,14 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  createFailedGenerationJob(input: CreateSaveInput, failure: JobFailure, llmCall?: LlmCallSummary): SaveGenerationJob {
+  createFailedGenerationJob(
+    input: CreateSaveInput,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary,
+    ownerUserId = defaultUser.id
+  ): SaveGenerationJob {
     if (input.idempotencyKey) {
-      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
@@ -308,6 +357,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
       status: "failed",
       phase: failure.phase,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
@@ -321,13 +371,18 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  getGenerationJobByIdempotencyKey(idempotencyKey: string): SaveGenerationJob | undefined {
-    const job = [...this.generationJobs.values()].find((item) => item.idempotencyKey === idempotencyKey);
+  getGenerationJobByIdempotencyKey(idempotencyKey: string, ownerUserId?: string): SaveGenerationJob | undefined {
+    const job = [...this.generationJobs.values()].find(
+      (item) => item.idempotencyKey === idempotencyKey && (!ownerUserId || ownerMatches(item.ownerUserId, ownerUserId))
+    );
     return job ? structuredClone(job) : undefined;
   }
 
-  getGenerationJob(jobId: string): SaveGenerationJob | undefined {
+  getGenerationJob(jobId: string, ownerUserId?: string): SaveGenerationJob | undefined {
     const job = this.generationJobs.get(jobId);
+    if (!job || (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId))) {
+      return undefined;
+    }
     return job ? structuredClone(job) : undefined;
   }
 
@@ -368,6 +423,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
     const completed: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
@@ -376,7 +432,7 @@ export class PrototypeStore implements FantasyWorldStore {
       draft: {
         id: id("draft"),
         input,
-        save: buildSave(input, generatedDraft),
+        save: { ...buildSave(input, generatedDraft), ownerUserId: job.ownerUserId ?? defaultUser.id },
         createdAt: now()
       }
     };
@@ -444,6 +500,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
     const retried: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
@@ -452,7 +509,7 @@ export class PrototypeStore implements FantasyWorldStore {
       draft: {
         id: id("draft"),
         input,
-        save: buildSave(input, generatedDraft),
+        save: { ...buildSave(input, generatedDraft), ownerUserId: job.ownerUserId ?? defaultUser.id },
         createdAt: now()
       }
     };
@@ -475,6 +532,7 @@ export class PrototypeStore implements FantasyWorldStore {
 
     const queued: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "queued",
       phase: "queued",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
@@ -485,10 +543,15 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(queued);
   }
 
-  acceptGenerationJob(jobId: string): Save | undefined {
+  acceptGenerationJob(jobId: string, ownerUserId?: string): Save | undefined {
     const job = this.generationJobs.get(jobId);
 
-    if (!job?.draft || job.status === "cancelled" || job.status === "failed") {
+    if (
+      !job?.draft ||
+      job.status === "cancelled" ||
+      job.status === "failed" ||
+      (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId))
+    ) {
       return undefined;
     }
 
@@ -504,13 +567,14 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(accepted);
   }
 
-  importSave(input: Save): Save {
+  importSave(input: Save, ownerUserId = defaultUser.id): Save {
     const imported = structuredClone(input);
     const importedId = this.saves.has(imported.id) ? id("save") : imported.id;
     const importedAt = now();
     const save: Save = {
       ...imported,
       id: importedId,
+      ownerUserId,
       turns: imported.turns.map((turn) => ({ ...turn, saveId: importedId })),
       updatedAt: importedAt
     };
@@ -778,7 +842,11 @@ export class PrototypeStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
@@ -813,7 +881,11 @@ export class PrototypeStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
@@ -829,6 +901,7 @@ export class PrototypeStore implements FantasyWorldStore {
     const job: TurnJob = {
       id: id("turn_job"),
       saveId,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
       status: "queued",
       phase: "queued",
       input,
@@ -852,7 +925,11 @@ export class PrototypeStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = this.getTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
@@ -868,6 +945,7 @@ export class PrototypeStore implements FantasyWorldStore {
     const job: TurnJob = {
       id: id("turn_job"),
       saveId,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
       status: "failed",
       phase: failure.phase,
       input,
@@ -881,9 +959,12 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  getTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): TurnJob | undefined {
+  getTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string, ownerUserId?: string): TurnJob | undefined {
     const job = [...this.turnJobs.values()].find(
-      (item) => item.saveId === saveId && item.idempotencyKey === idempotencyKey
+      (item) =>
+        item.saveId === saveId &&
+        item.idempotencyKey === idempotencyKey &&
+        (!ownerUserId || ownerMatches(item.ownerUserId, ownerUserId))
     );
     return job ? structuredClone(job) : undefined;
   }
@@ -1059,6 +1140,7 @@ export class PrototypeStore implements FantasyWorldStore {
     const queued: TurnJob = {
       id: job.id,
       saveId: job.saveId,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "queued",
       phase: "queued",
       input: job.input ?? {},
@@ -1069,7 +1151,7 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(queued);
   }
 
-  acceptTurn(turnId: string): Save | undefined {
+  acceptTurn(turnId: string, ownerUserId?: string): Save | undefined {
     const jobEntry = [...this.turnJobs.entries()].find(([, job]) => job.turn?.id === turnId);
 
     if (!jobEntry) {
@@ -1077,6 +1159,10 @@ export class PrototypeStore implements FantasyWorldStore {
     }
 
     const [jobId, job] = jobEntry;
+
+    if (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId)) {
+      return undefined;
+    }
     const save = this.saves.get(job.saveId);
 
     if (!save) {
@@ -1120,8 +1206,11 @@ export class PrototypeStore implements FantasyWorldStore {
     return structuredClone(restored);
   }
 
-  getTurnJob(jobId: string): TurnJob | undefined {
+  getTurnJob(jobId: string, ownerUserId?: string): TurnJob | undefined {
     const job = this.turnJobs.get(jobId);
+    if (!job || (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId))) {
+      return undefined;
+    }
     return job ? structuredClone(job) : undefined;
   }
 }
@@ -1339,6 +1428,15 @@ function normalizeName(value: string) {
   return value.trim().toLocaleLowerCase();
 }
 
+function normalizeUsername(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized || defaultUser.username;
+}
+
+function ownerMatches(ownerUserId: string | undefined, requestedUserId: string) {
+  return (ownerUserId ?? defaultUser.id) === requestedUserId;
+}
+
 export function isActiveJobStatus(status: JobStatus) {
   return status === "queued" || status === "running" || status === "needs_review";
 }
@@ -1482,6 +1580,7 @@ export function buildTurnDraft(
   const job: TurnJob = {
     id: jobId,
     saveId: save.id,
+    ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
     status: "needs_review",
     phase: "ready_for_review",
     input,

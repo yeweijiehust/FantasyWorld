@@ -158,6 +158,13 @@ export const ModelProbeResultSchema = Type.Object({
 });
 export type ModelProbeResult = Static<typeof ModelProbeResultSchema>;
 
+export const UserSchema = Type.Object({
+  id: IdSchema,
+  username: Type.String({ minLength: 1 }),
+  role: Type.Union([Type.Literal("admin"), Type.Literal("player")])
+});
+export type User = Static<typeof UserSchema>;
+
 export const SaveSettingsSchema = Type.Object({
   language: LanguageSchema,
   turnTimeScale: Type.String(),
@@ -303,6 +310,7 @@ export type Turn = Static<typeof TurnSchema>;
 
 export const SaveSchema = Type.Object({
   id: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   name: Type.String(),
   description: Type.String(),
   schemaVersion: Type.Literal(CURRENT_SAVE_SCHEMA_VERSION),
@@ -379,6 +387,7 @@ export type GeneratedWorldDraft = Static<typeof GeneratedWorldDraftSchema>;
 
 export const SaveListItemSchema = Type.Object({
   id: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   name: Type.String(),
   description: Type.String(),
   language: LanguageSchema,
@@ -416,6 +425,7 @@ export type SaveGenerationDraft = Static<typeof SaveGenerationDraftSchema>;
 
 export const SaveGenerationJobSchema = Type.Object({
   id: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   status: JobStatusSchema,
   phase: Type.Optional(Type.String()),
   idempotencyKey: Type.Optional(Type.String()),
@@ -475,6 +485,7 @@ export type PatchTurnDraftInput = Static<typeof PatchTurnDraftInputSchema>;
 export const TurnJobSchema = Type.Object({
   id: IdSchema,
   saveId: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   status: JobStatusSchema,
   phase: Type.Optional(Type.String()),
   idempotencyKey: Type.Optional(Type.String()),
@@ -496,6 +507,7 @@ export const ApiErrorSchema = Type.Object({
 export type ApiError = Static<typeof ApiErrorSchema>;
 
 export const SessionSchema = Type.Object({
-  authenticated: Type.Boolean()
+  authenticated: Type.Boolean(),
+  user: Type.Optional(UserSchema)
 });
 export type Session = Static<typeof SessionSchema>;

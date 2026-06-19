@@ -1,7 +1,8 @@
-import { jsonb, pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const saves = pgTable("saves", {
   id: text("id").primaryKey(),
+  ownerUserId: text("owner_user_id"),
   name: text("name").notNull(),
   description: text("description").notNull(),
   schemaVersion: text("schema_version").notNull(),
@@ -70,6 +71,18 @@ export const modelConfigs = pgTable("model_configs", {
 
 export const sessions = pgTable("sessions", {
   id: text("id").primaryKey(),
+  userId: text("user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
 });
+
+export const users = pgTable(
+  "users",
+  {
+    id: text("id").primaryKey(),
+    username: text("username").notNull(),
+    role: text("role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull()
+  },
+  (table) => [uniqueIndex("users_username_unique").on(table.username)]
+);

@@ -34,8 +34,8 @@ import {
   type Save,
   SaveSchema,
   SessionSchema,
-  TurnOrchestrationOutputSchema,
-  TurnJobSchema
+  TurnJobSchema,
+  TurnOrchestrationOutputSchema
 } from "@fantasy-world/shared";
 import Fastify, { type FastifyError } from "fastify";
 import { Type } from "typebox";
@@ -50,7 +50,7 @@ import {
   validateTurnGenerationOutput
 } from "./llm/turn-generation.js";
 import { buildWorldGenerationSystemPrompt, buildWorldGenerationUserPrompt } from "./llm/world-generation.js";
-import { buildGeneratedWorldDraft, prototypeStore } from "./store/prototype-store.js";
+import { buildGeneratedWorldDraft, defaultUser, prototypeStore } from "./store/prototype-store.js";
 import type { FantasyWorldStore } from "./store/types.js";
 import { createTurnOrchestration } from "./turn/orchestrator.js";
 
@@ -62,6 +62,7 @@ const CharacterParamsSchema = Type.Object({ id: Type.String(), characterId: Type
 const LocationParamsSchema = Type.Object({ id: Type.String(), locationId: Type.String() });
 const RelationshipParamsSchema = Type.Object({ id: Type.String(), relationshipId: Type.String() });
 const LoginBodySchema = Type.Object({
+  username: Type.Optional(Type.String()),
   password: Type.String()
 });
 
@@ -160,7 +161,10 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    async (request) => ({ authenticated: await store.hasSession(request.cookies.fw_session) })
+    async (request) => {
+      const user = await store.getSessionUser(request.cookies.fw_session);
+      return user ? { authenticated: true, user } : { authenticated: false };
+    }
   );
 
   app.post(
@@ -179,7 +183,8 @@ export function buildApp(options: BuildAppOptions) {
         return sendError(reply, 401, "invalid_credentials", "Invalid password");
       }
 
-      const sessionId = await store.createSession();
+      const user = await store.getOrCreateUser(request.body.username ?? defaultUser.username);
+      const sessionId = await store.createSession(user.id);
 
       reply.setCookie("fw_session", sessionId, {
         httpOnly: true,
@@ -188,7 +193,7 @@ export function buildApp(options: BuildAppOptions) {
         path: "/"
       });
 
-      return { authenticated: true };
+      return { authenticated: true, user };
     }
   );
 
@@ -260,7 +265,10 @@ export function buildApp(options: BuildAppOptions) {
         }
       }
     },
-    async () => store.listSaves()
+    async (request) => {
+      const user = await getRequestUser(store, request);
+      return store.listSaves(user.id);
+    }
   );
 
   app.get(
@@ -275,7 +283,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.getSave(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.getSave(request.params.id, user.id);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -293,6 +302,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
       const save = await store.patchSave(request.params.id, request.body);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
@@ -310,7 +326,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.getSave(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.getSave(request.params.id, user.id);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -327,7 +344,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.getSave(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.getSave(request.params.id, user.id);
       return save ? createSaveExport(save) : sendError(reply, 404, "not_found", "Save not found");
     }
   );
@@ -344,7 +362,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.getSave(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.getSave(request.params.id, user.id);
 
       if (!save) {
         return sendError(reply, 404, "not_found", "Save not found");
@@ -367,6 +386,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
       const save = await store.updateSaveModelConfig(request.params.id, request.body);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
@@ -384,6 +410,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
       const save = await store.clearSaveModelConfig(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
@@ -408,7 +441,8 @@ export function buildApp(options: BuildAppOptions) {
       }
 
       reply.code(201);
-      return await store.importSave(imported.save);
+      const user = await getRequestUser(store, request);
+      return await store.importSave(imported.save, user.id);
     }
   );
 
@@ -424,6 +458,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "No rollback snapshot available");
+      }
+
       const save = await store.rollbackSave(request.params.id);
       return save ?? sendError(reply, 404, "not_found", "No rollback snapshot available");
     }
@@ -442,6 +483,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
       const save = await store.patchSave(request.params.id, { settings: request.body });
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
@@ -460,6 +508,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save or location not found");
+      }
+
       const save = await store.createCharacter(request.params.id, request.body);
 
       if (!save) {
@@ -484,6 +539,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Character not found");
+      }
+
       const save = await store.patchCharacter(request.params.id, request.params.characterId, request.body);
       return save ?? sendError(reply, 404, "not_found", "Character not found");
     }
@@ -501,6 +563,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Character not found");
+      }
+
       const save = await store.deleteCharacter(request.params.id, request.params.characterId);
       return save ?? sendError(reply, 404, "not_found", "Character not found");
     }
@@ -519,6 +588,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
       const save = await store.createLocation(request.params.id, request.body);
 
       if (!save) {
@@ -543,6 +619,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Location not found");
+      }
+
       const save = await store.patchLocation(request.params.id, request.params.locationId, request.body);
       return save ?? sendError(reply, 404, "not_found", "Location not found");
     }
@@ -560,6 +643,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Location not found or still in use");
+      }
+
       const save = await store.deleteLocation(request.params.id, request.params.locationId);
       return save ?? sendError(reply, 404, "not_found", "Location not found or still in use");
     }
@@ -578,6 +668,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save or relationship character not found");
+      }
+
       const save = await store.createRelationship(request.params.id, request.body);
 
       if (!save) {
@@ -602,6 +699,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Relationship not found");
+      }
+
       const save = await store.patchRelationship(request.params.id, request.params.relationshipId, request.body);
       return save ?? sendError(reply, 404, "not_found", "Relationship not found");
     }
@@ -619,6 +723,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Relationship not found");
+      }
+
       const save = await store.deleteRelationship(request.params.id, request.params.relationshipId);
       return save ?? sendError(reply, 404, "not_found", "Relationship not found");
     }
@@ -637,6 +748,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getSave(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Save not found");
+      }
+
       const save = await store.patchSave(request.params.id, { worldMemory: request.body });
       return save ?? sendError(reply, 404, "not_found", "Save not found");
     }
@@ -654,8 +772,10 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+
       if (request.body.idempotencyKey) {
-        const existing = await store.getGenerationJobByIdempotencyKey(request.body.idempotencyKey);
+        const existing = await store.getGenerationJobByIdempotencyKey(request.body.idempotencyKey, user.id);
 
         if (existing) {
           if (jobExecution === "background" && existing.status === "queued") {
@@ -667,7 +787,7 @@ export function buildApp(options: BuildAppOptions) {
       }
 
       if (jobExecution === "background") {
-        const job = await store.createQueuedGenerationJob(request.body);
+        const job = await store.createQueuedGenerationJob(request.body, user.id);
         worker.scheduleGeneration(job.id);
         reply.code(201);
         return job;
@@ -681,12 +801,13 @@ export function buildApp(options: BuildAppOptions) {
         return await store.createFailedGenerationJob(
           request.body,
           toJobFailure("generating_world_draft", generatedDraft),
-          llmCall
+          llmCall,
+          user.id
         );
       }
 
       reply.code(201);
-      return await store.createGenerationJob(request.body, generatedDraft.output, llmCall);
+      return await store.createGenerationJob(request.body, generatedDraft.output, llmCall, user.id);
     }
   );
 
@@ -702,7 +823,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = await store.getGenerationJob(request.params.id);
+      const user = await getRequestUser(store, request);
+      const job = await store.getGenerationJob(request.params.id, user.id);
       return job ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
   );
@@ -715,7 +837,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      return sendJobSse(reply, async () => store.getGenerationJob(request.params.id), {
+      const user = await getRequestUser(store, request);
+      return sendJobSse(reply, async () => store.getGenerationJob(request.params.id, user.id), {
         error: { code: "not_found", message: "Generation job not found" }
       });
     }
@@ -733,6 +856,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getGenerationJob(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Generation job not found");
+      }
+
       const job = await store.cancelGenerationJob(request.params.id);
       return job ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
@@ -750,7 +880,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const current = await store.getGenerationJob(request.params.id);
+      const user = await getRequestUser(store, request);
+      const current = await store.getGenerationJob(request.params.id, user.id);
 
       if (!current) {
         return sendError(reply, 404, "not_found", "Generation job not found");
@@ -810,7 +941,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.acceptGenerationJob(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.acceptGenerationJob(request.params.id, user.id);
       return save ?? sendError(reply, 404, "not_found", "Generation job not found");
     }
   );
@@ -829,14 +961,19 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.getSave(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.getSave(request.params.id, user.id);
 
       if (!save) {
         return sendError(reply, 404, "not_found", "Save not found");
       }
 
       if (request.body.idempotencyKey) {
-        const existing = await store.getTurnJobByIdempotencyKey(request.params.id, request.body.idempotencyKey);
+        const existing = await store.getTurnJobByIdempotencyKey(
+          request.params.id,
+          request.body.idempotencyKey,
+          user.id
+        );
 
         if (existing) {
           if (jobExecution === "background" && existing.status === "queued") {
@@ -908,7 +1045,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const job = await store.getTurnJob(request.params.id);
+      const user = await getRequestUser(store, request);
+      const job = await store.getTurnJob(request.params.id, user.id);
       return job ?? sendError(reply, 404, "not_found", "Turn job not found");
     }
   );
@@ -921,7 +1059,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      return sendJobSse(reply, async () => store.getTurnJob(request.params.id), {
+      const user = await getRequestUser(store, request);
+      return sendJobSse(reply, async () => store.getTurnJob(request.params.id, user.id), {
         error: { code: "not_found", message: "Turn job not found" }
       });
     }
@@ -940,6 +1079,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getTurnJob(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Editable turn draft not found");
+      }
+
       const job = await store.patchTurnDraft(request.params.id, request.body);
       return job ?? sendError(reply, 404, "not_found", "Editable turn draft not found");
     }
@@ -957,6 +1103,13 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
+      const user = await getRequestUser(store, request);
+      const existing = await store.getTurnJob(request.params.id, user.id);
+
+      if (!existing) {
+        return sendError(reply, 404, "not_found", "Turn job not found");
+      }
+
       const job = await store.cancelTurnJob(request.params.id);
       return job ?? sendError(reply, 404, "not_found", "Turn job not found");
     }
@@ -974,7 +1127,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const current = await store.getTurnJob(request.params.id);
+      const user = await getRequestUser(store, request);
+      const current = await store.getTurnJob(request.params.id, user.id);
 
       if (!current) {
         return sendError(reply, 404, "not_found", "Turn job not found");
@@ -989,7 +1143,7 @@ export function buildApp(options: BuildAppOptions) {
         return current;
       }
 
-      const save = await store.getSave(current.saveId);
+      const save = await store.getSave(current.saveId, user.id);
 
       if (!save) {
         return sendError(reply, 404, "not_found", "Save not found");
@@ -1032,7 +1186,8 @@ export function buildApp(options: BuildAppOptions) {
       }
     },
     async (request, reply) => {
-      const save = await store.acceptTurn(request.params.id);
+      const user = await getRequestUser(store, request);
+      const save = await store.acceptTurn(request.params.id, user.id);
       return save ?? sendError(reply, 404, "not_found", "Turn not found");
     }
   );
@@ -1046,6 +1201,16 @@ export function buildApp(options: BuildAppOptions) {
   }
 
   return app;
+}
+
+type RequestWithCookies = {
+  cookies: {
+    fw_session?: string;
+  };
+};
+
+async function getRequestUser(store: FantasyWorldStore, request: RequestWithCookies) {
+  return (await store.getSessionUser(request.cookies.fw_session)) ?? defaultUser;
 }
 
 function resolveWebDistRoot() {

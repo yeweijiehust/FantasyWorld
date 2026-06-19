@@ -48,7 +48,8 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
 
 export const api = {
   session: () => request<Session>("/api/auth/session"),
-  login: (password: string) => request<Session>("/api/auth/login", { method: "POST", body: { password } }),
+  login: (password: string, username = "admin") =>
+    request<Session>("/api/auth/login", { method: "POST", body: { username, password } }),
   logout: () => request<Session>("/api/auth/logout", { method: "POST" }),
   modelConfig: () => request<ModelConfig>("/api/model-config"),
   updateModelConfig: (body: Partial<ModelConfig> & { apiKey?: string }) =>
