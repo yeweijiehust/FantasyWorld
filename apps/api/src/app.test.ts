@@ -8,6 +8,7 @@ import { createDatabaseStore } from "./db/client.js";
 import { MockLlmProvider } from "./llm/mock-provider.js";
 import { LlmService } from "./llm/service.js";
 import type { LlmProvider } from "./llm/types.js";
+import { SecretDecryptionError, secretDecryptionRecoveryMessage } from "./security/secrets.js";
 import { buildGeneratedWorldDraft, buildSave, PrototypeStore } from "./store/prototype-store.js";
 import { createTurnOrchestration } from "./turn/orchestrator.js";
 import type {
@@ -644,6 +645,34 @@ describe("FantasyWorld API auth and model config safety", () => {
 
     expect(fetched.statusCode).toBe(200);
     expect(JSON.stringify(fetched.json())).not.toContain(apiKey);
+
+    await app.close();
+  });
+
+  it("returns a recovery hint when stored model API keys cannot be decrypted", async () => {
+    const store = new PrototypeStore();
+    const app = buildApp({ env, store });
+    const cookie = await login(app);
+
+    store.getModelConfig = () => {
+      throw new SecretDecryptionError();
+    };
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/model-config",
+      headers: {
+        cookie
+      }
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        code: "secret_decryption_failed",
+        message: secretDecryptionRecoveryMessage
+      }
+    });
 
     await app.close();
   });

@@ -59,6 +59,7 @@ import {
   validateTurnGenerationOutput
 } from "./llm/turn-generation.js";
 import { buildWorldGenerationSystemPrompt, buildWorldGenerationUserPrompt } from "./llm/world-generation.js";
+import { isSecretDecryptionError } from "./security/secrets.js";
 import { buildGeneratedWorldDraft, defaultUser, prototypeStore } from "./store/prototype-store.js";
 import type { FantasyWorldStore } from "./store/types.js";
 import { createTurnOrchestration } from "./turn/orchestrator.js";
@@ -112,6 +113,16 @@ export function buildApp(options: BuildAppOptions) {
   }).withTypeProvider<TypeBoxTypeProvider>();
 
   app.setErrorHandler((error: FastifyError, _request, reply) => {
+    if (isSecretDecryptionError(error)) {
+      reply.code(500).send({
+        error: {
+          code: "secret_decryption_failed",
+          message: error.message
+        }
+      });
+      return;
+    }
+
     const statusCode = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
     const code = statusCode === 500 ? "internal_error" : error.validation ? "validation_error" : "request_error";
     reply.code(statusCode).send({

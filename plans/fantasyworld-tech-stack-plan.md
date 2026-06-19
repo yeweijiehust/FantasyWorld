@@ -180,6 +180,8 @@ FantasyWorld/
 - 旧 owner 为空的数据按 `user_admin` 兼容；协作授权不赋予全局模型配置或新存档创建权限之外的额外系统权限。
 - 用户模型 API key 用 `ENCRYPTION_KEY` 加密后存 Postgres。
 - 前端读取模型配置时只显示 provider/base URL/model、是否已配置 key、key 尾号。
+- `ENCRYPTION_KEY` 手动轮换使用 `pnpm keys:rotate`，先 dry-run 解密所有已存模型 key，再在事务中重写全局和存档级密文。
+- 模型配置读取或 LLM 凭据读取遇到解密失败时返回 `secret_decryption_failed`，提示核对 key、恢复备份或重新执行轮换。
 
 ## LLM And Turn Jobs
 
@@ -209,6 +211,7 @@ FantasyWorld/
 - 本地提供 `.env.example` 和 Docker Compose Postgres；真实 `.env`、`.env.*` 必须被 `.gitignore` 忽略，`.env.example`
   必须保留可提交。
 - 本地提供 `pnpm auth:hash` 生成管理员密码 hash，并在 `.env.example` 说明用法。
+- 本地提供 `pnpm keys:rotate` 执行 `ENCRYPTION_KEY` dry-run 和正式轮换，并在 `.env.example` 保留临时变量名。
 - GitHub remote：
   - GitHub 公开仓库已创建：`https://github.com/yeweijiehust/FantasyWorld.git`。
   - 本地 `origin` 已指向该仓库，当前 `main` 跟踪 `origin/main`。
@@ -225,6 +228,7 @@ FantasyWorld/
 - Render 连接 GitHub 仓库、填写生产环境变量和触发首次部署都由用户手动完成；项目实现侧只准备配置和提醒清单。
 - 用户完成 Render 连接后，`main` required checks 通过并合并会触发 Render 自动部署。
 - GitHub Actions 不直接调用 Render API，不在 GitHub Secrets 中保存 Render 部署密钥。
+- 生产备份、恢复演练和密钥轮换按 `plans/fantasyworld-backup-restore-runbook.md` 执行；正式轮换后由用户手动更新 Render `ENCRYPTION_KEY` 并 redeploy。
 
 ## GitHub Actions
 

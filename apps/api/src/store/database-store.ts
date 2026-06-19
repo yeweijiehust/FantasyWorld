@@ -151,6 +151,10 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const data = row.data as ModelConfig;
 
+    if (row.apiKeyCiphertext) {
+      decryptSecret(row.apiKeyCiphertext, this.encryptionKey);
+    }
+
     return structuredClone({
       ...data,
       hasApiKey: Boolean(row.apiKeyCiphertext) || data.hasApiKey
@@ -230,6 +234,10 @@ export class DatabaseStore implements FantasyWorldStore {
 
     if (!row?.modelConfig) {
       return undefined;
+    }
+
+    if (row.modelApiKeyCiphertext) {
+      decryptSecret(row.modelApiKeyCiphertext, this.encryptionKey);
     }
 
     return structuredClone(

@@ -52,7 +52,7 @@
   - Render 生产环境变量只保存在 Render 面板或 Render secret/env 配置中。
   - 日志必须脱敏，不记录完整 API key、session、敏感 prompt 或用户密钥。
   - 导出存档默认不包含解密后的模型 API key。
-  - 首版不支持 `ENCRYPTION_KEY` 自动轮换；启动或配置读取时必须检测解密失败并给出明确错误。
+  - `ENCRYPTION_KEY` 轮换使用手动维护窗口和 `pnpm keys:rotate`；配置读取时必须检测解密失败并给出明确恢复提示。
   - 部署文档必须强调备份 `ENCRYPTION_KEY`，否则已加密的 API key 可能无法恢复。
 - 仓库基础文件：
   - 实现前必须先建立 `.gitignore` 和 `.gitattributes`。
@@ -113,7 +113,7 @@
   - `plans/` 是项目决策来源。
   - 产品、技术栈、API、数据库、LLM 推演、测试门禁、部署或工作流发生变化时必须同步文档。
   - README 只作为入口索引和快速启动说明，不承载全部设计细节。
-  - 部署文档必须说明 Render Postgres 备份与恢复；应用内存档 JSON 导入/导出是用户级迁移和备份路径。
+  - 部署文档必须说明 Render/Postgres 备份、恢复演练和 `ENCRYPTION_KEY` 轮换；应用内存档 JSON 导入/导出是用户级迁移和备份路径。
   - README 或部署文档必须说明 GitHub 公开仓库、branch protection、GitHub Actions 和 Render 自动部署的关系。
 
 ## Assumptions
