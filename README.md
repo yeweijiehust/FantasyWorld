@@ -61,3 +61,4 @@ pnpm test:e2e
 - [V1 release checklist](plans/fantasyworld-v1-release-checklist.md)
 - [Post-v1 roadmap](plans/fantasyworld-post-v1-roadmap.md)
 - [Backup, restore, and key rotation runbook](plans/fantasyworld-backup-restore-runbook.md)
+- [V2 acceptance checklist](plans/fantasyworld-v2-acceptance-checklist.md)
