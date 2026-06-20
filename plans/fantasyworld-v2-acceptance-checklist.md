@@ -46,8 +46,8 @@ Last verified on 2026-06-19:
 - [x] PR branch pushed to GitHub.
 - [x] `ci` GitHub Action passed for latest Step 13 commit.
 - [x] `security` GitHub Action passed for latest Step 13 commit.
-- [ ] Final PR head `ci` passes after this checklist commit.
-- [ ] Final PR head `security` passes after this checklist commit.
+- [x] Final PR head `ci` passes after this checklist commit.
+- [x] Final PR head `security` passes after this checklist commit.
 
 ## Manual Production Deployment
 
