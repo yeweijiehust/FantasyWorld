@@ -26,6 +26,16 @@ const apiMock = vi.hoisted(() => ({
   cancelTurnJob: vi.fn(),
   retryTurnJob: vi.fn(),
   patchTurnDraft: vi.fn(),
+  saveModelConfig: vi.fn(),
+  updateSaveModelConfig: vi.fn(),
+  clearSaveModelConfig: vi.fn(),
+  collaborators: vi.fn(),
+  upsertCollaborator: vi.fn(),
+  patchCollaborator: vi.fn(),
+  removeCollaborator: vi.fn(),
+  playerInputs: vi.fn(),
+  createPlayerInput: vi.fn(),
+  reviewPlayerInput: vi.fn(),
   patchSave: vi.fn(),
   patchCharacter: vi.fn(),
   createCharacter: vi.fn(),
@@ -129,18 +139,37 @@ function makeSave(): Save {
   };
 }
 
+class MockEventSource {
+  onerror: (() => void) | null = null;
+
+  constructor(
+    readonly url: string,
+    readonly init?: EventSourceInit
+  ) {}
+
+  addEventListener() {}
+
+  close() {}
+}
+
 describe("WorldPage", () => {
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(async () => {
     localStorage.clear();
     vi.clearAllMocks();
+    vi.stubGlobal("EventSource", MockEventSource);
     await i18n.changeLanguage("en");
     useUiStore.setState({ selectedSaveId: undefined, uiLanguage: "en" });
     apiMock.saves.mockResolvedValue([]);
     apiMock.save.mockResolvedValue(makeSave());
+    apiMock.updateSaveModelConfig.mockResolvedValue(makeSave());
+    apiMock.clearSaveModelConfig.mockResolvedValue(makeSave());
+    apiMock.collaborators.mockResolvedValue([]);
+    apiMock.playerInputs.mockResolvedValue([]);
   });
 
   it("renders the create wizard and keeps world language separate from UI language", async () => {
@@ -178,5 +207,156 @@ describe("WorldPage", () => {
     expect(screen.getAllByText("World settings").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Save character" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Add relationship" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Save model").length).toBeGreaterThan(0);
+  });
+
+  it("saves a model override for the selected save", async () => {
+    const save = makeSave();
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    apiMock.saves.mockResolvedValue([item]);
+    apiMock.save.mockResolvedValue(save);
+    apiMock.updateSaveModelConfig.mockResolvedValue({
+      ...save,
+      modelConfig: {
+        baseUrl: "https://save-model.example.test/v1",
+        model: "save-model",
+        hasApiKey: true,
+        apiKeyTail: "alue"
+      }
+    });
+    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
+
+    renderWithClient();
+
+    expect(await screen.findByRole("heading", { name: "Test World" })).toBeInTheDocument();
+    await userEvent.type(screen.getAllByLabelText("Save model base URL")[0]!, "https://save-model.example.test/v1");
+    await userEvent.type(screen.getAllByLabelText("Save model")[0]!, "save-model");
+    await userEvent.type(screen.getAllByLabelText("Save model API key")[0]!, "save-secret-api-key-value");
+    await userEvent.type(screen.getAllByLabelText("Save model input token price")[0]!, "2");
+    await userEvent.type(screen.getAllByLabelText("Save model output token price")[0]!, "8");
+    await userEvent.click(screen.getAllByRole("button", { name: "Save model config" })[0]!);
+
+    await waitFor(() =>
+      expect(apiMock.updateSaveModelConfig).toHaveBeenCalledWith("save_1", {
+        baseUrl: "https://save-model.example.test/v1",
+        model: "save-model",
+        apiKey: "save-secret-api-key-value",
+        inputTokenPriceUsdPerMillion: 2,
+        outputTokenPriceUsdPerMillion: 8
+      })
+    );
+  });
+
+  it("shows turn usage and estimated cost", async () => {
+    const save = {
+      ...makeSave(),
+      turnNumber: 1,
+      turns: [
+        {
+          id: "turn_1",
+          saveId: "save_1",
+          turnNumber: 1,
+          status: "accepted" as const,
+          events: [
+            {
+              id: "event_1",
+              title: "Lantern signal",
+              body: "The harbor sees the lantern change color.",
+              involvedCharacterIds: ["character_1"],
+              dialogue: []
+            }
+          ],
+          stateChanges: [],
+          callSummary: {
+            model: "story-model",
+            provider: "openai-compatible" as const,
+            status: "succeeded" as const,
+            calls: 1,
+            durationMs: 1200,
+            estimatedTokens: 400,
+            inputTokens: 100,
+            outputTokens: 300,
+            totalTokens: 400,
+            estimatedCostUsd: 0.0026
+          },
+          createdAt: "2026-06-17T00:00:00.000Z"
+        }
+      ]
+    };
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    apiMock.saves.mockResolvedValue([item]);
+    apiMock.save.mockResolvedValue(save);
+    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
+
+    renderWithClient();
+
+    expect(await screen.findByText("Lantern signal")).toBeInTheDocument();
+    expect(screen.getAllByText(/100 in \/ 300 out \/ 400 total tokens/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\$0.002600/).length).toBeGreaterThan(0);
+  });
+
+  it("shows failed turn jobs with recovery controls", async () => {
+    const save = makeSave();
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    const failedJob = {
+      id: "turn_job_failed",
+      saveId: save.id,
+      status: "failed" as const,
+      phase: "validating_turn_references",
+      input: {
+        gmInstruction: "Break references",
+        idempotencyKey: "turn_failed"
+      },
+      error: "Unknown focus character id: character_missing",
+      failure: {
+        code: "invalid_llm_reference",
+        message: "Unknown focus character id: character_missing",
+        phase: "validating_turn_references",
+        retryable: true,
+        createdAt: "2026-06-18T00:00:00.000Z",
+        provider: "openai-compatible"
+      }
+    };
+
+    apiMock.saves.mockResolvedValue([item]);
+    apiMock.save.mockResolvedValue(save);
+    apiMock.createTurn.mockResolvedValue(failedJob);
+    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
+
+    renderWithClient();
+
+    expect(await screen.findByRole("heading", { name: "Test World" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Advance turn" }));
+
+    expect(await screen.findByText("Job failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("invalid_llm_reference: Unknown focus character id: character_missing")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry job" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel job" })).toBeEnabled();
   });
 });

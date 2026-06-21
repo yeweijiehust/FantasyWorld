@@ -6,8 +6,10 @@ import {
   type Language,
   type Location,
   type PatchTurnDraftInput,
+  type PlayerInput,
   type Relationship,
   type Save,
+  type SaveCollaborator,
   type SaveGenerationJob,
   type SaveImport,
   type StateChange,
@@ -571,6 +573,37 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
                 </div>
               </div>
             ) : null}
+            {currentGenerationJob?.status === "failed" ? (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-900">
+                <div className="font-semibold">{t("world.generationFailed")}</div>
+                {currentGenerationJob.failure ? (
+                  <div className="mt-1 text-sm text-red-800">
+                    {t("world.failureReason", {
+                      code: currentGenerationJob.failure.code,
+                      message: currentGenerationJob.failure.message
+                    })}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
+                    type="button"
+                    disabled={retryGeneration.isPending}
+                    onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
+                  >
+                    {t("common.retry")}
+                  </button>
+                  <button
+                    className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
+                    type="button"
+                    disabled={cancelGeneration.isPending}
+                    onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="flex justify-between gap-2">
@@ -644,9 +677,13 @@ function Timeline({ save }: { save: Save }) {
     activeTurnJob?.status === "running" ||
     activeTurnJob?.status === "needs_review";
   const draftTurn = activeTurnJob?.status === "needs_review" ? activeTurnJob.turn : undefined;
+  const branchTurns = currentBranchTurns(save);
   const displayedTurns =
-    draftTurn && !save.turns.some((turnItem) => turnItem.id === draftTurn.id) ? [...save.turns, draftTurn] : save.turns;
-  const latestTurn = draftTurn ?? save.turns.at(-1);
+    draftTurn && !branchTurns.some((turnItem) => turnItem.id === draftTurn.id)
+      ? [...branchTurns, draftTurn]
+      : branchTurns;
+  const latestTurn = draftTurn ?? branchTurns.at(-1);
+  const latestUsageSummary = latestTurn ? formatTurnUsage(latestTurn.callSummary, t) : undefined;
   const rollback = useMutation({
     mutationFn: () => api.rollbackSave(save.id),
     onSuccess: refreshSave
@@ -792,10 +829,16 @@ function Timeline({ save }: { save: Save }) {
                     ) : null}
                   </div>
                 ))}
+                <div className="mt-3 text-xs text-slate-500">{formatTurnUsage(turnItem.callSummary, t)}</div>
               </article>
             ))}
           </div>
         )}
+        {save.turns.length > branchTurns.length ? (
+          <div className="mt-3 text-xs text-slate-500">
+            Branch timeline: {branchTurns.length} current / {save.turns.length} total turns
+          </div>
+        ) : null}
       </div>
       {activeTurnJob?.status === "needs_review" && activeTurnJob.turn && activeTurnJob.draftState ? (
         <TurnDraftEditor key={`${activeTurnJob.id}:${activeTurnJob.turn.id}`} job={activeTurnJob} save={save} />
@@ -838,7 +881,9 @@ function Timeline({ save }: { save: Save }) {
                 <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                   type="button"
-                  disabled={cancelTurn.isPending || activeTurnJob.status !== "needs_review"}
+                  disabled={
+                    cancelTurn.isPending || activeTurnJob.status === "cancelled" || activeTurnJob.status === "accepted"
+                  }
                   onClick={() => cancelTurn.mutate(activeTurnJob.id)}
                 >
                   {t("world.cancelJob")}
@@ -846,7 +891,7 @@ function Timeline({ save }: { save: Save }) {
                 <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                   type="button"
-                  disabled={retryTurn.isPending || activeTurnJob.status === "needs_review"}
+                  disabled={retryTurn.isPending || activeTurnJobIsOpen || activeTurnJob.status === "accepted"}
                   onClick={() => retryTurn.mutate(activeTurnJob.id)}
                 >
                   {t("world.retryJob")}
@@ -858,10 +903,23 @@ function Timeline({ save }: { save: Save }) {
             {activeTurnJob
               ? `Job ${activeTurnJob.status}${activeTurnJob.phase ? ` · ${activeTurnJob.phase}` : ""}`
               : latestTurn
-                ? `${latestTurn.callSummary.calls} call · ~${latestTurn.callSummary.estimatedTokens} tokens`
+                ? latestUsageSummary
                 : t("world.mockReady")}
           </div>
         </div>
+        {activeTurnJob?.status === "failed" ? (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+            <div className="font-semibold">{t("world.jobFailed")}</div>
+            {activeTurnJob.failure ? (
+              <div className="mt-1 text-red-800">
+                {t("world.failureReason", {
+                  code: activeTurnJob.failure.code,
+                  message: activeTurnJob.failure.message
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {turn.error ? <p className="mt-2 text-sm text-red-600">{turn.error.message}</p> : null}
         {rollback.error ? <p className="mt-2 text-sm text-red-600">{rollback.error.message}</p> : null}
         {acceptTurn.error ? <p className="mt-2 text-sm text-red-600">{acceptTurn.error.message}</p> : null}
@@ -1080,6 +1138,10 @@ function WorldDetails({ save }: { save: Save }) {
     <div className="grid gap-5">
       <WorldSettingsEditor key={`${save.id}:${JSON.stringify(save.settings)}`} save={save} />
       <WorldMemoryEditor key={`${save.id}:${save.worldMemory.worldSummary}`} save={save} />
+      <CollaborationPanel
+        key={`${save.id}:${save.characters.map((character) => character.id).join("|")}`}
+        save={save}
+      />
       <section>
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
           <Users size={16} />
@@ -1140,6 +1202,204 @@ function WorldDetails({ save }: { save: Save }) {
   );
 }
 
+function CollaborationPanel({ save }: { save: Save }) {
+  const queryClient = useQueryClient();
+  const collaborators = useQuery({
+    queryKey: ["collaborators", save.id],
+    queryFn: () => api.collaborators(save.id),
+    retry: false
+  });
+  const playerInputs = useQuery({
+    queryKey: ["player-inputs", save.id],
+    queryFn: () => api.playerInputs(save.id),
+    retry: false
+  });
+  const [username, setUsername] = useState("");
+  const [role, setRole] = useState<SaveCollaborator["role"]>("viewer");
+  const [characterId, setCharacterId] = useState(save.characters[0]?.id ?? "");
+  const [intent, setIntent] = useState("");
+  const addCollaborator = useMutation({
+    mutationFn: () =>
+      api.upsertCollaborator(save.id, {
+        username,
+        role,
+        ...(role === "player" && characterId ? { characterId } : {})
+      }),
+    onSuccess: async () => {
+      setUsername("");
+      await queryClient.invalidateQueries({ queryKey: ["collaborators", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const submitPlayerInput = useMutation({
+    mutationFn: () => api.createPlayerInput(save.id, { intent }),
+    onSuccess: async () => {
+      setIntent("");
+      await queryClient.invalidateQueries({ queryKey: ["player-inputs", save.id] });
+    }
+  });
+  const reviewPlayerInput = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected" }) =>
+      api.reviewPlayerInput(id, { status }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["player-inputs", save.id] });
+    }
+  });
+  const canManageCollaborators = !collaborators.error;
+  const visiblePlayerInputs = playerInputs.data ?? [];
+
+  return (
+    <section>
+      <div className="mb-2 text-sm font-semibold text-slate-950">Collaboration</div>
+      {canManageCollaborators ? (
+        <div className="grid gap-3">
+          <div className="grid gap-2">
+            {(collaborators.data ?? []).map((collaborator) => (
+              <CollaboratorRow
+                key={`${collaborator.saveId}:${collaborator.userId}:${collaborator.role}:${collaborator.characterId}`}
+                collaborator={collaborator}
+                save={save}
+              />
+            ))}
+            {collaborators.isLoading ? <div className="text-sm text-slate-500">Loading collaborators...</div> : null}
+          </div>
+          <div className="rounded-md border border-slate-200 p-3">
+            <div className="grid gap-2">
+              <input
+                aria-label="Collaborator username"
+                className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                placeholder="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+              <div className="grid grid-cols-[1fr_1fr] gap-2">
+                <select
+                  aria-label="Collaborator role"
+                  className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                  value={role}
+                  onChange={(event) => setRole(event.target.value as SaveCollaborator["role"])}
+                >
+                  <option value="gm">GM</option>
+                  <option value="viewer">Viewer</option>
+                  <option value="player">Player</option>
+                </select>
+                <select
+                  aria-label="Collaborator character"
+                  className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950 disabled:opacity-50"
+                  value={characterId}
+                  disabled={role !== "player"}
+                  onChange={(event) => setCharacterId(event.target.value)}
+                >
+                  {save.characters.map((character) => (
+                    <option key={character.id} value={character.id}>
+                      {character.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+                type="button"
+                disabled={addCollaborator.isPending || !username.trim()}
+                onClick={() => addCollaborator.mutate()}
+              >
+                <Plus size={14} />
+                Add collaborator
+              </button>
+              {addCollaborator.error ? <p className="text-sm text-red-600">{addCollaborator.error.message}</p> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3 rounded-md border border-slate-200 p-3">
+        <label className="grid gap-2 text-xs font-medium text-slate-600">
+          Player input
+          <textarea
+            aria-label="Player input"
+            className="min-h-20 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-950"
+            value={intent}
+            onChange={(event) => setIntent(event.target.value)}
+          />
+        </label>
+        <button
+          className="mt-2 inline-flex h-8 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+          type="button"
+          disabled={submitPlayerInput.isPending || !intent.trim()}
+          onClick={() => submitPlayerInput.mutate()}
+        >
+          <Sparkles size={14} />
+          Submit input
+        </button>
+        {submitPlayerInput.error ? (
+          <p className="mt-2 text-sm text-red-600">{submitPlayerInput.error.message}</p>
+        ) : null}
+      </div>
+      {visiblePlayerInputs.length > 0 ? (
+        <div className="mt-3 grid gap-2">
+          {visiblePlayerInputs.map((input) => (
+            <PlayerInputRow key={`${input.id}:${input.status}`} input={input} review={reviewPlayerInput.mutate} />
+          ))}
+        </div>
+      ) : null}
+      {playerInputs.error && canManageCollaborators ? (
+        <p className="mt-2 text-sm text-red-600">{playerInputs.error.message}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function CollaboratorRow({ collaborator, save }: { collaborator: SaveCollaborator; save: Save }) {
+  const character = collaborator.characterId
+    ? save.characters.find((item) => item.id === collaborator.characterId)
+    : undefined;
+
+  return (
+    <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="font-semibold text-slate-800">{collaborator.username}</div>
+      <div>
+        {collaborator.role}
+        {character ? ` · ${character.name}` : ""}
+      </div>
+    </div>
+  );
+}
+
+function PlayerInputRow({
+  input,
+  review
+}: {
+  input: PlayerInput;
+  review: (payload: { id: string; status: "approved" | "rejected" }) => void;
+}) {
+  return (
+    <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-semibold text-slate-800">{input.username}</span>
+        <span>{input.status}</span>
+      </div>
+      <div className="whitespace-pre-wrap leading-5">{input.intent}</div>
+      {input.status === "pending" ? (
+        <div className="mt-2 flex gap-2">
+          <button
+            className="h-7 rounded-md bg-slate-950 px-2 text-xs font-semibold text-white"
+            type="button"
+            onClick={() => review({ id: input.id, status: "approved" })}
+          >
+            Approve
+          </button>
+          <button
+            className="h-7 rounded-md border border-slate-200 px-2 text-xs font-semibold text-slate-700"
+            type="button"
+            onClick={() => review({ id: input.id, status: "rejected" })}
+          >
+            Reject
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function WorldMemoryEditor({ save }: { save: Save }) {
   const queryClient = useQueryClient();
   const [worldSummary, setWorldSummary] = useState(save.worldMemory.worldSummary);
@@ -1180,6 +1440,15 @@ function WorldSettingsEditor({ save }: { save: Save }) {
   const [randomness, setRandomness] = useState(save.settings.randomness);
   const [contentBoundary, setContentBoundary] = useState(save.settings.contentBoundary);
   const [styleGuide, setStyleGuide] = useState(save.settings.styleGuide);
+  const [modelBaseUrl, setModelBaseUrl] = useState(save.modelConfig?.baseUrl ?? "");
+  const [modelName, setModelName] = useState(save.modelConfig?.model ?? "");
+  const [modelApiKey, setModelApiKey] = useState("");
+  const [inputTokenPrice, setInputTokenPrice] = useState(
+    save.modelConfig?.inputTokenPriceUsdPerMillion?.toString() ?? ""
+  );
+  const [outputTokenPrice, setOutputTokenPrice] = useState(
+    save.modelConfig?.outputTokenPriceUsdPerMillion?.toString() ?? ""
+  );
   const settings = useMutation({
     mutationFn: () =>
       api.patchSave(save.id, {
@@ -1192,6 +1461,55 @@ function WorldSettingsEditor({ save }: { save: Save }) {
         }
       }),
     onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const saveModel = useMutation({
+    mutationFn: () => {
+      const payload: Parameters<typeof api.updateSaveModelConfig>[1] = {};
+      const baseUrl = modelBaseUrl.trim();
+      const model = modelName.trim();
+      const apiKey = modelApiKey.trim();
+      const parsedInputPrice = parseOptionalPrice(inputTokenPrice);
+      const parsedOutputPrice = parseOptionalPrice(outputTokenPrice);
+
+      if (baseUrl) {
+        payload.baseUrl = baseUrl;
+      }
+
+      if (model) {
+        payload.model = model;
+      }
+
+      if (apiKey) {
+        payload.apiKey = apiKey;
+      }
+
+      if (parsedInputPrice !== undefined) {
+        payload.inputTokenPriceUsdPerMillion = parsedInputPrice;
+      }
+
+      if (parsedOutputPrice !== undefined) {
+        payload.outputTokenPriceUsdPerMillion = parsedOutputPrice;
+      }
+
+      return api.updateSaveModelConfig(save.id, payload);
+    },
+    onSuccess: async () => {
+      setModelApiKey("");
+      await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+    }
+  });
+  const clearModel = useMutation({
+    mutationFn: () => api.clearSaveModelConfig(save.id),
+    onSuccess: async () => {
+      setModelBaseUrl("");
+      setModelName("");
+      setModelApiKey("");
+      setInputTokenPrice("");
+      setOutputTokenPrice("");
       await queryClient.invalidateQueries({ queryKey: ["save", save.id] });
       await queryClient.invalidateQueries({ queryKey: ["saves"] });
     }
@@ -1251,6 +1569,91 @@ function WorldSettingsEditor({ save }: { save: Save }) {
         Save settings
       </button>
       {settings.error ? <p className="mt-2 text-sm text-red-600">{settings.error.message}</p> : null}
+      <div className="mt-5 border-t border-slate-200 pt-4">
+        <div className="mb-2 text-sm font-semibold text-slate-950">Save model config</div>
+        <div className="grid gap-2">
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            Base URL
+            <input
+              aria-label="Save model base URL"
+              className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+              value={modelBaseUrl}
+              onChange={(event) => setModelBaseUrl(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            Model
+            <input
+              aria-label="Save model"
+              className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+              value={modelName}
+              onChange={(event) => setModelName(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-slate-600">
+            API key
+            <input
+              aria-label="Save model API key"
+              className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+              type="password"
+              value={modelApiKey}
+              onChange={(event) => setModelApiKey(event.target.value)}
+            />
+          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              Input $ / 1M tokens
+              <input
+                aria-label="Save model input token price"
+                className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                min={0}
+                step="0.000001"
+                type="number"
+                value={inputTokenPrice}
+                onChange={(event) => setInputTokenPrice(event.target.value)}
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              Output $ / 1M tokens
+              <input
+                aria-label="Save model output token price"
+                className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-950"
+                min={0}
+                step="0.000001"
+                type="number"
+                value={outputTokenPrice}
+                onChange={(event) => setOutputTokenPrice(event.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          {save.modelConfig
+            ? `Override ${save.modelConfig.model}${save.modelConfig.hasApiKey && save.modelConfig.apiKeyTail ? ` · key ${save.modelConfig.apiKeyTail}` : ""}`
+            : "Global model config"}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            className="inline-flex h-8 items-center gap-2 rounded-md bg-slate-950 px-3 text-xs font-semibold text-white disabled:opacity-60"
+            type="button"
+            disabled={saveModel.isPending}
+            onClick={() => saveModel.mutate()}
+          >
+            <SaveIcon size={14} />
+            Save model config
+          </button>
+          <button
+            className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 disabled:opacity-60"
+            type="button"
+            disabled={clearModel.isPending || !save.modelConfig}
+            onClick={() => clearModel.mutate()}
+          >
+            Clear model config
+          </button>
+        </div>
+        {saveModel.error ? <p className="mt-2 text-sm text-red-600">{saveModel.error.message}</p> : null}
+        {clearModel.error ? <p className="mt-2 text-sm text-red-600">{clearModel.error.message}</p> : null}
+      </div>
     </section>
   );
 }
@@ -1738,6 +2141,66 @@ function splitLines(value: string) {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseOptionalPrice(value: string) {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function formatTurnUsage(callSummary: Save["turns"][number]["callSummary"], t: (key: string) => string) {
+  const parts = [
+    callSummary.provider ?? callSummary.model,
+    `${callSummary.calls} call`,
+    usageTokenText(callSummary),
+    `${callSummary.durationMs} ms`,
+    callSummary.estimatedCostUsd !== undefined
+      ? `$${callSummary.estimatedCostUsd.toFixed(6)}`
+      : t("world.costNotConfigured")
+  ];
+
+  if (callSummary.estimatedUsage) {
+    parts.push(t("world.usageEstimated"));
+  }
+
+  return parts.filter(Boolean).join(" · ");
+}
+
+function usageTokenText(callSummary: Save["turns"][number]["callSummary"]) {
+  if (callSummary.inputTokens !== undefined || callSummary.outputTokens !== undefined) {
+    return `${callSummary.inputTokens ?? 0} in / ${callSummary.outputTokens ?? 0} out / ${
+      callSummary.totalTokens ?? callSummary.estimatedTokens
+    } total tokens`;
+  }
+
+  return `~${callSummary.estimatedTokens} tokens`;
+}
+
+function currentBranchTurns(save: Save) {
+  const byId = new Map(save.turns.map((turn) => [turn.id, turn]));
+  const headTurnId =
+    save.headTurnId ??
+    (save.turnNumber > 0 ? save.turns.filter((turn) => turn.turnNumber === save.turnNumber).at(-1)?.id : undefined);
+
+  if (!headTurnId) {
+    return [];
+  }
+
+  const path: Save["turns"] = [];
+  let current = byId.get(headTurnId);
+
+  while (current) {
+    path.push(current);
+    current = current.parentTurnId ? byId.get(current.parentTurnId) : undefined;
+  }
+
+  return path.reverse();
 }
 
 function EmptyWorld() {

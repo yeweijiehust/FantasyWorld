@@ -19,7 +19,8 @@
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @fantasy-world/api db:generate",
     "db:migrate": "pnpm --filter @fantasy-world/api db:migrate",
-    "auth:hash": "pnpm --filter @fantasy-world/api auth:hash"
+    "auth:hash": "pnpm --filter @fantasy-world/api auth:hash",
+    "keys:rotate": "pnpm --filter @fantasy-world/api keys:rotate"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

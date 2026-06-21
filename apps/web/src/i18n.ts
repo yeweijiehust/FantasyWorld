@@ -17,6 +17,7 @@ const resources = {
       },
       login: {
         subtitle: "Single-player GM console",
+        username: "Username",
         password: "Admin password",
         enter: "Enter",
         signingIn: "Signing in..."
@@ -59,6 +60,7 @@ const resources = {
         model: "Model",
         generateDraft: "Generate draft",
         draftReady: "Draft ready",
+        generationFailed: "Draft generation failed",
         acceptDraft: "Accept draft",
         importJson: "Import JSON",
         importSaveJson: "Import save JSON",
@@ -78,6 +80,10 @@ const resources = {
         turnAccepted: "Turn accepted",
         cancelJob: "Cancel job",
         retryJob: "Retry job",
+        jobFailed: "Job failed",
+        failureReason: "{{code}}: {{message}}",
+        usageEstimated: "estimated",
+        costNotConfigured: "cost not configured",
         mockReady: "Mock LLM ready",
         draft: "Draft"
       },
@@ -87,6 +93,8 @@ const resources = {
         baseUrl: "Base URL",
         model: "Model",
         apiKey: "API key",
+        inputTokenPrice: "Input $ / 1M tokens",
+        outputTokenPrice: "Output $ / 1M tokens",
         currentKey: "Current key",
         configuredEnding: "configured ending {{tail}}",
         notConfigured: "not configured",
@@ -95,7 +103,20 @@ const resources = {
         yes: "yes",
         no: "no",
         testing: "Testing...",
-        save: "Save settings"
+        save: "Save settings",
+        healthTitle: "Health",
+        healthBody: "App health, model health, and recent LLM call metrics.",
+        refreshHealth: "Refresh",
+        appHealth: "App",
+        appOk: "App ok",
+        loadingHealth: "Loading...",
+        modelHealth: "Model",
+        modelHealthStatus: "Status: {{status}}",
+        modelHealthProvider: "Provider: {{provider}}",
+        modelHealthModel: "Model: {{model}}",
+        modelHealthMetrics: "{{calls}} calls, {{failures}} failures, {{errorRate}} error rate, {{latency}} ms avg",
+        runSmokeTest: "Run smoke test",
+        smokeTesting: "Testing..."
       }
     }
   },
@@ -111,6 +132,7 @@ const resources = {
       },
       login: {
         subtitle: "单人 GM 控制台",
+        username: "用户名",
         password: "管理员密码",
         enter: "进入",
         signingIn: "正在进入..."
@@ -152,6 +174,7 @@ const resources = {
         model: "模型",
         generateDraft: "生成草稿",
         draftReady: "草稿已就绪",
+        generationFailed: "草稿生成失败",
         acceptDraft: "接受草稿",
         importJson: "导入 JSON",
         importSaveJson: "导入存档 JSON",
@@ -171,6 +194,10 @@ const resources = {
         turnAccepted: "回合已接受",
         cancelJob: "取消任务",
         retryJob: "重试任务",
+        jobFailed: "任务失败",
+        failureReason: "{{code}}：{{message}}",
+        usageEstimated: "估算",
+        costNotConfigured: "未配置成本",
         mockReady: "Mock LLM 已就绪",
         draft: "草稿"
       },
@@ -180,6 +207,8 @@ const resources = {
         baseUrl: "Base URL",
         model: "模型",
         apiKey: "API key",
+        inputTokenPrice: "输入 $ / 百万 tokens",
+        outputTokenPrice: "输出 $ / 百万 tokens",
         currentKey: "当前 key",
         configuredEnding: "已配置，尾号 {{tail}}",
         notConfigured: "未配置",
@@ -188,7 +217,20 @@ const resources = {
         yes: "是",
         no: "否",
         testing: "测试中...",
-        save: "保存设置"
+        save: "保存设置",
+        healthTitle: "健康状态",
+        healthBody: "应用健康、模型健康和最近 LLM 调用指标。",
+        refreshHealth: "刷新",
+        appHealth: "应用",
+        appOk: "应用正常",
+        loadingHealth: "加载中...",
+        modelHealth: "模型",
+        modelHealthStatus: "状态：{{status}}",
+        modelHealthProvider: "Provider：{{provider}}",
+        modelHealthModel: "模型：{{model}}",
+        modelHealthMetrics: "{{calls}} 次调用，{{failures}} 次失败，错误率 {{errorRate}}，平均 {{latency}} ms",
+        runSmokeTest: "运行 smoke test",
+        smokeTesting: "测试中..."
       }
     }
   }

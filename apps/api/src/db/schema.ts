@@ -1,13 +1,18 @@
-import { jsonb, pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const saves = pgTable("saves", {
   id: text("id").primaryKey(),
+  ownerUserId: text("owner_user_id"),
   name: text("name").notNull(),
   description: text("description").notNull(),
   schemaVersion: text("schema_version").notNull(),
   turnNumber: integer("turn_number").notNull(),
+  headTurnId: text("head_turn_id"),
+  currentBranchId: text("current_branch_id"),
   saveSeed: text("save_seed").notNull(),
   settings: jsonb("settings").notNull(),
+  modelConfig: jsonb("model_config"),
+  modelApiKeyCiphertext: text("model_api_key_ciphertext"),
   worldMemory: jsonb("world_memory").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
@@ -66,6 +71,43 @@ export const modelConfigs = pgTable("model_configs", {
 
 export const sessions = pgTable("sessions", {
   id: text("id").primaryKey(),
+  userId: text("user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+});
+
+export const users = pgTable(
+  "users",
+  {
+    id: text("id").primaryKey(),
+    username: text("username").notNull(),
+    role: text("role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull()
+  },
+  (table) => [uniqueIndex("users_username_unique").on(table.username)]
+);
+
+export const saveCollaborators = pgTable(
+  "save_collaborators",
+  {
+    id: text("id").primaryKey(),
+    saveId: text("save_id").notNull(),
+    userId: text("user_id").notNull(),
+    role: text("role").notNull(),
+    characterId: text("character_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => [uniqueIndex("save_collaborators_save_user_unique").on(table.saveId, table.userId)]
+);
+
+export const playerInputs = pgTable("player_inputs", {
+  id: text("id").primaryKey(),
+  saveId: text("save_id").notNull(),
+  userId: text("user_id").notNull(),
+  characterId: text("character_id").notNull(),
+  status: text("status").notNull(),
+  data: jsonb("data").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });

@@ -38,7 +38,16 @@ describe("PrototypeStore repository behavior", () => {
     const rolledBack = store.rollbackSave(save.id);
 
     expect(rolledBack?.turnNumber).toBe(0);
-    expect(rolledBack?.turns).toHaveLength(0);
+    expect(rolledBack?.turns).toHaveLength(1);
+    expect(rolledBack?.headTurnId).toBeUndefined();
+
+    const branchTurnJob = store.createTurnJob(save.id, { idempotencyKey: "repo-branch-turn" });
+    const branchAccepted = branchTurnJob?.turn ? store.acceptTurn(branchTurnJob.turn.id) : undefined;
+
+    expect(branchAccepted?.turnNumber).toBe(1);
+    expect(branchAccepted?.turns).toHaveLength(2);
+    expect(branchAccepted?.turns[1]?.parentTurnId).toBeUndefined();
+    expect(branchAccepted?.turns[1]?.branchId).not.toBe(branchAccepted?.turns[0]?.branchId);
   });
 
   it("removes relationships when a character is deleted", () => {
