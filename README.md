@@ -31,6 +31,9 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 Set `DATA_STORE=postgres`, `DATABASE_URL`, `SESSION_SECRET`, `ENCRYPTION_KEY`, and `ADMIN_PASSWORD_HASH` in Render. Back
 up `ENCRYPTION_KEY`; stored model API keys cannot be recovered if it is lost.
 
+`LLM_GENERATION_TIMEOUT_MS` is optional. It defaults to `120000` and can be raised up to `300000` for slower model
+providers.
+
 Before rotating `ENCRYPTION_KEY`, take a Postgres backup and run:
 
 ```powershell

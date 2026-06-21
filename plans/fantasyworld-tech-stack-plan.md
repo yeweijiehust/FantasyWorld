@@ -190,6 +190,7 @@ FantasyWorld/
 - 支持 OpenAI-compatible 接口：base URL、API key、model。
 - LLM SDK 层保持薄封装，负责请求、结构化输出、重试、token/耗时统计和错误归一。
 - 保存模型配置时执行连接和能力探测，记录 JSON mode、usage、stream 支持情况。
+- 真实生成默认超时为 120 秒，可用 `LLM_GENERATION_TIMEOUT_MS` 调整，允许范围为 15000 到 300000 ms。
 - 设置页提供 app health、model health、最近 LLM 调用错误率/平均延迟和手动 live smoke test；无 API key 时 live smoke
   test 明确 skipped。
 - LLM 近期指标为进程内滑动窗口，只记录 provider、model、成功/失败、错误摘要和 latency，不记录 prompt、raw output 或 API
