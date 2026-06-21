@@ -11,28 +11,28 @@ import {
   type Save,
   type SaveCollaborator,
   type SaveGenerationJob,
-  type SaveImport,
   type StateChange,
   type TurnJob
 } from "@fantasy-world/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
+  ArrowLeft,
   BookOpen,
   CheckCircle2,
   Clock3,
   Download,
+  FolderOpen,
   Play,
   Plus,
   RotateCcw,
   Save as SaveIcon,
   Sparkles,
-  Upload,
   Users
 } from "lucide-react";
-import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api/client.js";
-import { useUiStore } from "../state/ui.js";
 
 const wizardSteps = [
   { id: "template", labelKey: "world.stepTemplate" },
@@ -76,89 +76,103 @@ function toWizardValues(
   };
 }
 
-export function WorldPage() {
+export function WorldPage({ saveId }: { saveId?: string }) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const selectedSaveId = useUiStore((state) => state.selectedSaveId);
-  const setSelectedSaveId = useUiStore((state) => state.setSelectedSaveId);
-  const saves = useQuery({ queryKey: ["saves"], queryFn: api.saves });
   const save = useQuery({
-    queryKey: ["save", selectedSaveId],
-    queryFn: () => api.save(selectedSaveId ?? ""),
-    enabled: Boolean(selectedSaveId)
+    queryKey: ["save", saveId],
+    queryFn: () => api.save(saveId ?? ""),
+    enabled: Boolean(saveId)
   });
-
-  useEffect(() => {
-    if (!selectedSaveId && saves.data?.[0]) {
-      setSelectedSaveId(saves.data[0].id);
-    }
-  }, [saves.data, selectedSaveId, setSelectedSaveId]);
 
   const activeSave = save.data;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
-      <aside className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-950">{t("world.saves")}</h2>
-          <span className="text-xs text-slate-500">{saves.data?.length ?? 0}</span>
+    <section className="mx-auto max-w-7xl px-4 py-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          <Link
+            to="/"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <ArrowLeft size={16} />
+            {t("world.backToTitle")}
+          </Link>
+          <Link
+            to="/load"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <FolderOpen size={16} />
+            {t("world.loadOtherSave")}
+          </Link>
         </div>
-        <div className="grid gap-2">
-          {saves.isLoading ? <div className="text-sm text-slate-500">{t("world.loadingSaves")}</div> : null}
-          {saves.error ? <div className="text-sm text-red-600">{saves.error.message}</div> : null}
-          {saves.data?.map((item) => (
-            <button
-              key={item.id}
-              className={`rounded-md border px-3 py-2 text-left text-sm ${
-                selectedSaveId === item.id
-                  ? "border-slate-950 bg-slate-950 text-white"
-                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-              type="button"
-              onClick={() => setSelectedSaveId(item.id)}
-            >
-              <div className="truncate font-medium">{item.name}</div>
-              <div className={selectedSaveId === item.id ? "truncate text-slate-300" : "truncate text-slate-500"}>
-                {t("world.turnSummary", { turn: item.turnNumber, characters: item.characterCount })}
-              </div>
-            </button>
-          ))}
-        </div>
-        <CreateSavePanel
-          onCreated={async (created) => {
-            await queryClient.invalidateQueries({ queryKey: ["saves"] });
-            setSelectedSaveId(created.id);
-          }}
-        />
-      </aside>
-
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white lg:min-h-[680px]">
-        {save.error ? <div className="p-4 text-sm text-red-600">{save.error.message}</div> : null}
-        {activeSave ? <Timeline key={activeSave.id} save={activeSave} /> : <EmptyWorld />}
-      </section>
-
-      {activeSave ? (
-        <details className="rounded-lg border border-slate-200 bg-white p-4 lg:hidden">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-950">{t("world.mobileDetails")}</summary>
-          <div className="mt-4">
-            <WorldDetails save={activeSave} />
+        {activeSave ? (
+          <div className="min-w-0 text-right">
+            <div className="truncate text-sm font-semibold text-slate-950">{activeSave.name}</div>
+            <div className="text-xs text-slate-500">
+              {t("world.turnSummary", {
+                turn: activeSave.turnNumber,
+                characters: activeSave.characters.length
+              })}
+            </div>
           </div>
-        </details>
+        ) : null}
+      </div>
+
+      {!saveId ? <EmptyWorld /> : null}
+      {save.isLoading ? (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
+          {t("world.loadingSave")}
+        </div>
+      ) : null}
+      {save.error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="font-semibold">{t("world.saveLoadFailed")}</div>
+          <div className="mt-1">{save.error.message}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link className="rounded-md bg-white px-3 py-2 text-red-800" to="/">
+              {t("world.backToTitle")}
+            </Link>
+            <Link className="rounded-md bg-white px-3 py-2 text-red-800" to="/load">
+              {t("world.loadOtherSave")}
+            </Link>
+          </div>
+        </div>
       ) : null}
 
-      <aside className="hidden min-w-0 rounded-lg border border-slate-200 bg-white p-4 lg:block">
-        {activeSave ? (
-          <WorldDetails save={activeSave} />
-        ) : (
-          <div className="text-sm text-slate-500">{t("world.noWorldSelected")}</div>
-        )}
-      </aside>
-    </div>
+      {activeSave ? (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="min-w-0 rounded-lg border border-slate-200 bg-white lg:min-h-[680px]">
+            <Timeline key={activeSave.id} save={activeSave} />
+          </section>
+
+          <details className="rounded-lg border border-slate-200 bg-white p-4 lg:hidden">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">
+              {t("world.mobileDetails")}
+            </summary>
+            <div className="mt-4">
+              <WorldDetails save={activeSave} />
+            </div>
+          </details>
+
+          <aside className="hidden min-w-0 rounded-lg border border-slate-200 bg-white p-4 lg:block">
+            <WorldDetails save={activeSave} />
+          </aside>
+        </div>
+      ) : (
+        !save.isLoading &&
+        !save.error && (
+          <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
+            {t("world.noWorldSelected")}
+          </div>
+        )
+      )}
+    </section>
   );
 }
 
-function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<void> }) {
+export function CreateSavePage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(() => (localStorage.getItem(generationJobStorageKey) ? 4 : 0));
   const [values, setValues] = useState<WizardValues>(() => toWizardValues(defaultTemplateInput));
@@ -179,8 +193,6 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       setStep(4);
     }
   });
-  const [importError, setImportError] = useState("");
-  const [importMessage, setImportMessage] = useState("");
   const accept = useMutation({
     mutationFn: (jobId: string) => api.acceptGenerationJob(jobId),
     onSuccess: async (save) => {
@@ -191,7 +203,8 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
       localStorage.removeItem(generationJobStorageKey);
       setGenerationJobId(null);
       generation.reset();
-      await onCreated(save);
+      await queryClient.invalidateQueries({ queryKey: ["saves"] });
+      await navigate({ to: "/world/$saveId", params: { saveId: save.id } });
     }
   });
   const cancelGeneration = useMutation({
@@ -206,18 +219,6 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     onSuccess: (job) => {
       generation.reset();
       queryClient.setQueryData(["generation-job", job.id], job);
-    }
-  });
-  const importSave = useMutation({
-    mutationFn: api.importSave,
-    onSuccess: async (save) => {
-      setImportError("");
-      setImportMessage(t("world.imported"));
-      await onCreated(save);
-    },
-    onError: (error) => {
-      setImportMessage("");
-      setImportError(error.message);
     }
   });
   const selectedTemplate = WORLD_TEMPLATES.find((template) => template.id === values.templateId) ?? WORLD_TEMPLATES[0];
@@ -332,318 +333,311 @@ function CreateSavePanel({ onCreated }: { onCreated: (save: Save) => Promise<voi
     setGenerationJobId(null);
     setStep(0);
   };
-  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-
-    if (!file) {
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(await file.text()) as SaveImport;
-      importSave.mutate(parsed);
-    } catch (error) {
-      setImportMessage("");
-      setImportError(error instanceof Error ? error.message : t("world.invalidJson"));
-    }
-  };
-
   return (
-    <div className="mt-4 border-t border-slate-200 pt-4">
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-950">
-        <Plus size={16} />
-        {t("world.createHeading")}
-      </div>
-      <div className="grid grid-cols-5 gap-1" aria-label={t("world.createSteps")}>
-        {wizardSteps.map((item, index) => (
-          <button
-            key={item.id}
-            className={`h-8 rounded-md text-[11px] font-medium ${
-              step === index ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-            }`}
-            type="button"
-            onClick={() => setStep(index)}
-          >
-            {t(item.labelKey)}
-          </button>
-        ))}
-      </div>
-      <div className="mt-3 grid gap-3 text-sm">
-        {step === 0 ? (
-          <div className="grid gap-3">
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.worldLanguage")}
-              <select
-                aria-label={t("world.worldLanguage")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                value={values.language}
-                onChange={(event) => handleLanguageChange(event.target.value as Language)}
-              >
-                <option value="zh">中文</option>
-                <option value="en">English</option>
-              </select>
-            </label>
-            <div className="grid gap-2">
-              {WORLD_TEMPLATES.map((template) => (
-                <button
-                  key={template.id}
-                  className={`rounded-md border px-3 py-2 text-left ${
-                    values.templateId === template.id
-                      ? "border-slate-950 bg-slate-950 text-white"
-                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                  type="button"
-                  onClick={() => applyTemplate(template.id)}
-                >
-                  <div className="font-semibold">{template.name[values.language]}</div>
-                  <div className={values.templateId === template.id ? "text-slate-300" : "text-slate-500"}>
-                    {template.genre[values.language]}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {step === 1 ? (
-          <div className="grid gap-3">
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.worldName")}
-              <input
-                aria-label={t("world.worldName")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                value={values.name}
-                onChange={(event) => updateValue("name", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.premise")}
-              <textarea
-                aria-label={t("world.premise")}
-                className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
-                value={values.premise}
-                onChange={(event) => updateValue("premise", event.target.value)}
-              />
-            </label>
-          </div>
-        ) : null}
-        {step === 2 ? (
-          <div className="grid gap-3">
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.characterSeeds")}
-              <textarea
-                aria-label={t("world.characterSeeds")}
-                className="min-h-28 rounded-md border border-slate-300 px-3 py-2"
-                value={seedText}
-                onChange={(event) => {
-                  setSeedText(event.target.value);
-                  setFormError("");
-                }}
-              />
-            </label>
-            <div className={characterSeeds.length < 3 || characterSeeds.length > 8 ? "text-red-600" : "text-slate-500"}>
-              {t("world.characterCount", { count: characterSeeds.length })}
-            </div>
-          </div>
-        ) : null}
-        {step === 3 ? (
-          <div className="grid gap-3">
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.contentBoundary")}
-              <input
-                aria-label={t("world.contentBoundary")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                value={values.contentBoundary}
-                onChange={(event) => updateValue("contentBoundary", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.turnScale")}
-              <input
-                aria-label={t("world.turnScale")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                value={values.turnTimeScale}
-                onChange={(event) => updateValue("turnTimeScale", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.randomness")}
-              <input
-                aria-label={t("world.randomness")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                type="number"
-                min={0}
-                max={100}
-                value={values.randomness}
-                onChange={(event) => updateValue("randomness", Number(event.target.value))}
-              />
-            </label>
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.styleGuide")}
-              <textarea
-                aria-label={t("world.styleGuide")}
-                className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
-                value={values.styleGuide}
-                onChange={(event) => updateValue("styleGuide", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.modelBaseUrl")}
-              <input
-                aria-label={t("world.modelBaseUrl")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                value={values.modelBaseUrl}
-                onChange={(event) => updateValue("modelBaseUrl", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 font-medium text-slate-700">
-              {t("world.model")}
-              <input
-                aria-label={t("world.modelOverride")}
-                className="h-9 rounded-md border border-slate-300 px-3"
-                value={values.modelName}
-                onChange={(event) => updateValue("modelName", event.target.value)}
-              />
-            </label>
-          </div>
-        ) : null}
-        {step === 4 ? (
-          <div className="grid gap-3">
-            <div className="rounded-md bg-slate-50 p-3 text-slate-600">
-              {selectedTemplate.name[values.language]} · {characterSeeds.length} characters
-            </div>
-            <button
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 font-semibold text-white disabled:opacity-60"
-              type="button"
-              disabled={generation.isPending}
-              onClick={generateDraft}
-            >
-              <Sparkles size={16} />
-              {t("world.generateDraft")}
-            </button>
-            {currentGenerationJob?.draft ? (
-              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
-                <div className="font-semibold">{t("world.draftReady")}</div>
-                <div className="mt-1 text-emerald-800">
-                  {currentGenerationJob.draft.save.characters.length} characters ·{" "}
-                  {currentGenerationJob.draft.save.locations[0]?.name}
-                </div>
-                <div className="mt-2 text-xs text-emerald-800">
-                  {currentGenerationJob.draft.save.worldMemory.worldSummary}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {currentGenerationJob.draft.save.characters.map((character) => (
-                    <span key={character.id} className="rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-900">
-                      {character.name}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    className="h-8 rounded-md bg-emerald-700 px-3 text-white disabled:opacity-60"
-                    type="button"
-                    disabled={
-                      accept.isPending ||
-                      currentGenerationJob.status === "cancelled" ||
-                      currentGenerationJob.status === "failed"
-                    }
-                    onClick={() => accept.mutate(currentGenerationJob.id)}
-                  >
-                    {t("world.acceptDraft")}
-                  </button>
-                  <button
-                    className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
-                    type="button"
-                    disabled={cancelGeneration.isPending || currentGenerationJob.status !== "needs_review"}
-                    onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                  <button
-                    className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
-                    type="button"
-                    disabled={retryGeneration.isPending || currentGenerationJob.status === "needs_review"}
-                    onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
-                  >
-                    {t("common.retry")}
-                  </button>
-                  <button className="h-8 rounded-md bg-white px-3 text-emerald-800" type="button" onClick={resetDraft}>
-                    {t("common.revise")}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {currentGenerationJob?.status === "failed" ? (
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-900">
-                <div className="font-semibold">{t("world.generationFailed")}</div>
-                {currentGenerationJob.failure ? (
-                  <div className="mt-1 text-sm text-red-800">
-                    {t("world.failureReason", {
-                      code: currentGenerationJob.failure.code,
-                      message: currentGenerationJob.failure.message
-                    })}
-                  </div>
-                ) : null}
-                <div className="mt-3 flex gap-2">
-                  <button
-                    className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
-                    type="button"
-                    disabled={retryGeneration.isPending}
-                    onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
-                  >
-                    {t("common.retry")}
-                  </button>
-                  <button
-                    className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
-                    type="button"
-                    disabled={cancelGeneration.isPending}
-                    onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="flex justify-between gap-2">
-          <button
-            className="h-8 rounded-md border border-slate-300 px-3 text-slate-700 disabled:opacity-50"
-            type="button"
-            disabled={step === 0}
-            onClick={() => setStep((current) => Math.max(current - 1, 0))}
-          >
-            {t("common.back")}
-          </button>
-          {step < wizardSteps.length - 1 ? (
-            <button className="h-8 rounded-md bg-slate-950 px-3 text-white" type="button" onClick={nextStep}>
-              {t("common.next")}
-            </button>
-          ) : null}
+    <section className="mx-auto max-w-5xl px-4 py-8">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">{t("create.kicker")}</p>
+          <h1 className="mt-2 text-3xl font-semibold text-slate-950">{t("world.createHeading")}</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{t("create.body")}</p>
         </div>
+        <Link
+          to="/"
+          className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          <ArrowLeft size={16} />
+          {t("world.backToTitle")}
+        </Link>
       </div>
-      {formError ? <p className="mt-2 text-sm text-red-600">{formError}</p> : null}
-      {generation.error ? <p className="mt-2 text-sm text-red-600">{generation.error.message}</p> : null}
-      {accept.error ? <p className="mt-2 text-sm text-red-600">{accept.error.message}</p> : null}
-      {cancelGeneration.error ? <p className="mt-2 text-sm text-red-600">{cancelGeneration.error.message}</p> : null}
-      {retryGeneration.error ? <p className="mt-2 text-sm text-red-600">{retryGeneration.error.message}</p> : null}
-      <label className="mt-3 grid gap-2 text-xs font-medium text-slate-600">
-        <span className="inline-flex items-center gap-2">
-          <Upload size={14} />
-          {t("world.importJson")}
-        </span>
-        <input
-          aria-label={t("world.importSaveJson")}
-          className="block w-full text-xs file:mr-3 file:h-8 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-slate-700"
-          type="file"
-          accept="application/json"
-          disabled={importSave.isPending}
-          onChange={(event) => void handleImport(event)}
-        />
-      </label>
-      {importMessage ? <p className="mt-2 text-sm text-emerald-700">{importMessage}</p> : null}
-      {importError ? <p className="mt-2 text-sm text-red-600">{importError}</p> : null}
-    </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+        <div className="grid grid-cols-2 gap-1 sm:grid-cols-5" aria-label={t("world.createSteps")}>
+          {wizardSteps.map((item, index) => (
+            <button
+              key={item.id}
+              className={`min-h-8 rounded-md px-2 py-1 text-xs font-medium ${
+                step === index ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+              type="button"
+              onClick={() => setStep(index)}
+            >
+              {t(item.labelKey)}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 grid gap-3 text-sm">
+          {step === 0 ? (
+            <div className="grid gap-3">
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.worldLanguage")}
+                <select
+                  aria-label={t("world.worldLanguage")}
+                  className="h-9 rounded-md border border-slate-300 px-3"
+                  value={values.language}
+                  onChange={(event) => handleLanguageChange(event.target.value as Language)}
+                >
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+              <div className="grid gap-2">
+                {WORLD_TEMPLATES.map((template) => (
+                  <button
+                    key={template.id}
+                    className={`rounded-md border px-3 py-2 text-left ${
+                      values.templateId === template.id
+                        ? "border-slate-950 bg-slate-950 text-white"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                    type="button"
+                    onClick={() => applyTemplate(template.id)}
+                  >
+                    <div className="font-semibold">{template.name[values.language]}</div>
+                    <div className={values.templateId === template.id ? "text-slate-300" : "text-slate-500"}>
+                      {template.genre[values.language]}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {step === 1 ? (
+            <div className="grid gap-3">
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.worldName")}
+                <input
+                  aria-label={t("world.worldName")}
+                  className="h-9 rounded-md border border-slate-300 px-3"
+                  value={values.name}
+                  onChange={(event) => updateValue("name", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.premise")}
+                <textarea
+                  aria-label={t("world.premise")}
+                  className="min-h-24 rounded-md border border-slate-300 px-3 py-2"
+                  value={values.premise}
+                  onChange={(event) => updateValue("premise", event.target.value)}
+                />
+              </label>
+            </div>
+          ) : null}
+          {step === 2 ? (
+            <div className="grid gap-3">
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.characterSeeds")}
+                <textarea
+                  aria-label={t("world.characterSeeds")}
+                  className="min-h-28 rounded-md border border-slate-300 px-3 py-2"
+                  value={seedText}
+                  onChange={(event) => {
+                    setSeedText(event.target.value);
+                    setFormError("");
+                  }}
+                />
+              </label>
+              <div
+                className={characterSeeds.length < 3 || characterSeeds.length > 8 ? "text-red-600" : "text-slate-500"}
+              >
+                {t("world.characterCount", { count: characterSeeds.length })}
+              </div>
+            </div>
+          ) : null}
+          {step === 3 ? (
+            <div className="grid gap-3">
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.contentBoundary")}
+                <input
+                  aria-label={t("world.contentBoundary")}
+                  className="h-9 rounded-md border border-slate-300 px-3"
+                  value={values.contentBoundary}
+                  onChange={(event) => updateValue("contentBoundary", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.turnScale")}
+                <input
+                  aria-label={t("world.turnScale")}
+                  className="h-9 rounded-md border border-slate-300 px-3"
+                  value={values.turnTimeScale}
+                  onChange={(event) => updateValue("turnTimeScale", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.randomness")}
+                <input
+                  aria-label={t("world.randomness")}
+                  className="h-9 rounded-md border border-slate-300 px-3"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={values.randomness}
+                  onChange={(event) => updateValue("randomness", Number(event.target.value))}
+                />
+              </label>
+              <label className="grid gap-2 font-medium text-slate-700">
+                {t("world.styleGuide")}
+                <textarea
+                  aria-label={t("world.styleGuide")}
+                  className="min-h-20 rounded-md border border-slate-300 px-3 py-2"
+                  value={values.styleGuide}
+                  onChange={(event) => updateValue("styleGuide", event.target.value)}
+                />
+              </label>
+              <details className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+                  {t("create.advancedSettings")}
+                </summary>
+                <div className="mt-3 grid gap-3">
+                  <label className="grid gap-2 font-medium text-slate-700">
+                    {t("world.modelBaseUrl")}
+                    <input
+                      aria-label={t("world.modelBaseUrl")}
+                      className="h-9 rounded-md border border-slate-300 px-3"
+                      value={values.modelBaseUrl}
+                      onChange={(event) => updateValue("modelBaseUrl", event.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-2 font-medium text-slate-700">
+                    {t("world.model")}
+                    <input
+                      aria-label={t("world.modelOverride")}
+                      className="h-9 rounded-md border border-slate-300 px-3"
+                      value={values.modelName}
+                      onChange={(event) => updateValue("modelName", event.target.value)}
+                    />
+                  </label>
+                </div>
+              </details>
+            </div>
+          ) : null}
+          {step === 4 ? (
+            <div className="grid gap-3">
+              <div className="rounded-md bg-slate-50 p-3 text-slate-600">
+                {selectedTemplate.name[values.language]} · {characterSeeds.length} characters
+              </div>
+              <button
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 font-semibold text-white disabled:opacity-60"
+                type="button"
+                disabled={generation.isPending}
+                onClick={generateDraft}
+              >
+                <Sparkles size={16} />
+                {t("world.generateDraft")}
+              </button>
+              {currentGenerationJob?.draft ? (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
+                  <div className="font-semibold">{t("world.draftReady")}</div>
+                  <div className="mt-1 text-emerald-800">
+                    {currentGenerationJob.draft.save.characters.length} characters ·{" "}
+                    {currentGenerationJob.draft.save.locations[0]?.name}
+                  </div>
+                  <div className="mt-2 text-xs text-emerald-800">
+                    {currentGenerationJob.draft.save.worldMemory.worldSummary}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {currentGenerationJob.draft.save.characters.map((character) => (
+                      <span key={character.id} className="rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-900">
+                        {character.name}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      className="h-8 rounded-md bg-emerald-700 px-3 text-white disabled:opacity-60"
+                      type="button"
+                      disabled={
+                        accept.isPending ||
+                        currentGenerationJob.status === "cancelled" ||
+                        currentGenerationJob.status === "failed"
+                      }
+                      onClick={() => accept.mutate(currentGenerationJob.id)}
+                    >
+                      {t("world.acceptDraft")}
+                    </button>
+                    <button
+                      className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
+                      type="button"
+                      disabled={cancelGeneration.isPending || currentGenerationJob.status !== "needs_review"}
+                      onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      className="h-8 rounded-md bg-white px-3 text-emerald-800 disabled:opacity-60"
+                      type="button"
+                      disabled={retryGeneration.isPending || currentGenerationJob.status === "needs_review"}
+                      onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
+                    >
+                      {t("common.retry")}
+                    </button>
+                    <button
+                      className="h-8 rounded-md bg-white px-3 text-emerald-800"
+                      type="button"
+                      onClick={resetDraft}
+                    >
+                      {t("common.revise")}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {currentGenerationJob?.status === "failed" ? (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-red-900">
+                  <div className="font-semibold">{t("world.generationFailed")}</div>
+                  {currentGenerationJob.failure ? (
+                    <div className="mt-1 text-sm text-red-800">
+                      {t("world.failureReason", {
+                        code: currentGenerationJob.failure.code,
+                        message: currentGenerationJob.failure.message
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
+                      type="button"
+                      disabled={retryGeneration.isPending}
+                      onClick={() => retryGeneration.mutate(currentGenerationJob.id)}
+                    >
+                      {t("common.retry")}
+                    </button>
+                    <button
+                      className="h-8 rounded-md bg-white px-3 text-red-800 disabled:opacity-60"
+                      type="button"
+                      disabled={cancelGeneration.isPending}
+                      onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="flex justify-between gap-2">
+            <button
+              className="h-8 rounded-md border border-slate-300 px-3 text-slate-700 disabled:opacity-50"
+              type="button"
+              disabled={step === 0}
+              onClick={() => setStep((current) => Math.max(current - 1, 0))}
+            >
+              {t("common.back")}
+            </button>
+            {step < wizardSteps.length - 1 ? (
+              <button className="h-8 rounded-md bg-slate-950 px-3 text-white" type="button" onClick={nextStep}>
+                {t("common.next")}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {formError ? <p className="mt-2 text-sm text-red-600">{formError}</p> : null}
+        {generation.error ? <p className="mt-2 text-sm text-red-600">{generation.error.message}</p> : null}
+        {accept.error ? <p className="mt-2 text-sm text-red-600">{accept.error.message}</p> : null}
+        {cancelGeneration.error ? <p className="mt-2 text-sm text-red-600">{cancelGeneration.error.message}</p> : null}
+        {retryGeneration.error ? <p className="mt-2 text-sm text-red-600">{retryGeneration.error.message}</p> : null}
+      </div>
+    </section>
   );
 }
 function Timeline({ save }: { save: Save }) {

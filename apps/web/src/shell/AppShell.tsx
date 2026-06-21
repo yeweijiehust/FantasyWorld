@@ -35,7 +35,7 @@ export function AppShell({ nav, children }: AppShellProps) {
 
   return (
     <div className="min-h-screen bg-[#f6f3ec]">
-      <header className="border-b border-slate-200 bg-white/80">
+      <header className="sticky top-0 z-20 border-b border-white/50 bg-white/75 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
             <div className="text-lg font-semibold text-slate-950">FantasyWorld</div>
@@ -75,7 +75,7 @@ export function AppShell({ nav, children }: AppShellProps) {
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-7xl px-4 py-5">{children}</main>
+      <main>{children}</main>
     </div>
   );
 }

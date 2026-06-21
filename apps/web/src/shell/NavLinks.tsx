@@ -7,7 +7,10 @@ export function NavLinks() {
   return (
     <>
       <Link to="/" className="[&.active]:text-slate-950">
-        {t("nav.world")}
+        {t("nav.title")}
+      </Link>
+      <Link to="/load" className="[&.active]:text-slate-950">
+        {t("nav.load")}
       </Link>
       <Link to="/settings" className="[&.active]:text-slate-950">
         {t("nav.settings")}

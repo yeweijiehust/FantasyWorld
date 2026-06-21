@@ -1,13 +1,22 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider
+} from "@tanstack/react-router";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Save, SaveListItem } from "@fantasy-world/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n.js";
-import { useUiStore } from "../state/ui.js";
-import { WorldPage } from "./WorldPage.js";
+import { LoadSavePage } from "./LoadSavePage.js";
+import { TitlePage } from "./TitlePage.js";
+import { CreateSavePage, WorldPage } from "./WorldPage.js";
 
 const apiMock = vi.hoisted(() => ({
   saves: vi.fn(),
@@ -52,19 +61,73 @@ vi.mock("../api/client.js", () => ({
   api: apiMock
 }));
 
-function renderWithClient() {
+type TestRoute = "title" | "create" | "load" | "world";
+
+function renderWithClient(route: TestRoute = "world") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false }
     }
   });
+  const rootRoute = createRootRoute({ component: () => <Outlet /> });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: route === "title" ? TitlePage : TestPlaceholder
+  });
+  const createRoutePage = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/create",
+    component: route === "create" ? CreateSavePage : TestPlaceholder
+  });
+  const loadRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/load",
+    component: route === "load" ? LoadSavePage : TestPlaceholder
+  });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings",
+    component: TestPlaceholder
+  });
+  const worldRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/world/$saveId",
+    component: route === "world" ? () => <WorldPage saveId="save_1" /> : TestPlaceholder
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, createRoutePage, loadRoute, settingsRoute, worldRoute]),
+    history: createMemoryHistory({ initialEntries: [initialEntry(route)] })
+  });
 
-  return render(
+  const rendered = render(
     <QueryClientProvider client={queryClient}>
-      <WorldPage />
+      <RouterProvider router={router} />
     </QueryClientProvider>
   );
+
+  return { ...rendered, router };
+}
+
+function TestPlaceholder() {
+  return <div data-testid="route-placeholder" />;
+}
+
+function initialEntry(route: TestRoute) {
+  if (route === "create") {
+    return "/create";
+  }
+
+  if (route === "load") {
+    return "/load";
+  }
+
+  if (route === "world") {
+    return "/world/save_1";
+  }
+
+  return "/";
 }
 
 function makeSave(): Save {
@@ -163,7 +226,6 @@ describe("WorldPage", () => {
     vi.clearAllMocks();
     vi.stubGlobal("EventSource", MockEventSource);
     await i18n.changeLanguage("en");
-    useUiStore.setState({ selectedSaveId: undefined, uiLanguage: "en" });
     apiMock.saves.mockResolvedValue([]);
     apiMock.save.mockResolvedValue(makeSave());
     apiMock.updateSaveModelConfig.mockResolvedValue(makeSave());
@@ -172,8 +234,17 @@ describe("WorldPage", () => {
     apiMock.playerInputs.mockResolvedValue([]);
   });
 
+  it("renders the title screen entry actions", async () => {
+    renderWithClient("title");
+
+    expect(await screen.findByRole("heading", { name: "FantasyWorld" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Create game" })).toHaveAttribute("href", "/create");
+    expect(screen.getByRole("link", { name: "Load save" })).toHaveAttribute("href", "/load");
+    expect(screen.getByRole("link", { name: "Model settings" })).toHaveAttribute("href", "/settings");
+  });
+
   it("renders the create wizard and keeps world language separate from UI language", async () => {
-    renderWithClient();
+    renderWithClient("create");
 
     expect(await screen.findByText("New world")).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText("World language"), "en");
@@ -184,6 +255,75 @@ describe("WorldPage", () => {
 
     expect(await screen.findByText("新世界")).toBeInTheDocument();
     expect(screen.getByLabelText("存档语言")).toHaveValue("en");
+  });
+
+  it("accepts a generated draft and enters the playable world", async () => {
+    const save = makeSave();
+    const generationJob = {
+      id: "generation_job_1",
+      status: "needs_review" as const,
+      input: {
+        templateId: "fantasy-frontier",
+        name: save.name,
+        premise: save.description,
+        characterSeeds: ["A", "B", "C"],
+        settings: save.settings
+      },
+      draft: {
+        id: "draft_1",
+        input: {
+          templateId: "fantasy-frontier",
+          name: save.name,
+          premise: save.description,
+          characterSeeds: ["A", "B", "C"],
+          settings: save.settings
+        },
+        save,
+        createdAt: "2026-06-21T00:00:00.000Z"
+      }
+    };
+    apiMock.createGenerationJob.mockResolvedValue(generationJob);
+    apiMock.acceptGenerationJob.mockResolvedValue(save);
+    const { router } = renderWithClient("create");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+    expect(await screen.findByText("Draft ready")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Accept draft" }));
+
+    await waitFor(() => expect(apiMock.acceptGenerationJob).toHaveBeenCalledWith("generation_job_1"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/world/save_1"));
+  });
+
+  it("loads an existing save from the load page", async () => {
+    const save = makeSave();
+    const item: SaveListItem = {
+      id: save.id,
+      name: save.name,
+      description: save.description,
+      language: save.settings.language,
+      turnNumber: save.turnNumber,
+      characterCount: save.characters.length,
+      updatedAt: save.updatedAt
+    };
+    apiMock.saves.mockResolvedValue([item]);
+    const { router } = renderWithClient("load");
+
+    await userEvent.click(await screen.findByRole("link", { name: /Test World/ }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/world/save_1"));
+  });
+
+  it("imports a save JSON from the load page and enters it", async () => {
+    const save = makeSave();
+    apiMock.importSave.mockResolvedValue(save);
+    const { router } = renderWithClient("load");
+    const file = new File([JSON.stringify({ save })], "save.json", { type: "application/json" });
+
+    await userEvent.upload(await screen.findByLabelText("Import save JSON"), file);
+
+    await waitFor(() => expect(apiMock.importSave).toHaveBeenCalled());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/world/save_1"));
   });
 
   it("renders workbench editing controls for a selected save", async () => {
@@ -232,8 +372,6 @@ describe("WorldPage", () => {
         apiKeyTail: "alue"
       }
     });
-    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
-
     renderWithClient();
 
     expect(await screen.findByRole("heading", { name: "Test World" })).toBeInTheDocument();
@@ -302,8 +440,6 @@ describe("WorldPage", () => {
     };
     apiMock.saves.mockResolvedValue([item]);
     apiMock.save.mockResolvedValue(save);
-    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
-
     renderWithClient();
 
     expect(await screen.findByText("Lantern signal")).toBeInTheDocument();
@@ -345,8 +481,6 @@ describe("WorldPage", () => {
     apiMock.saves.mockResolvedValue([item]);
     apiMock.save.mockResolvedValue(save);
     apiMock.createTurn.mockResolvedValue(failedJob);
-    useUiStore.setState({ selectedSaveId: save.id, uiLanguage: "en" });
-
     renderWithClient();
 
     expect(await screen.findByRole("heading", { name: "Test World" })).toBeInTheDocument();
