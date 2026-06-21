@@ -15,6 +15,34 @@
       "when": 1781620385604,
       "tag": "0001_friendly_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781789345081,
+      "tag": "0002_ancient_dormammu",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781792071980,
+      "tag": "0003_nervous_gabe_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781832404294,
+      "tag": "0004_clean_thanos",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781833860077,
+      "tag": "0005_lying_nocturne",
+      "breakpoints": true
     }
   ]
 }

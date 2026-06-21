@@ -6,21 +6,34 @@ import {
   type CharacterPatch,
   type CreateCharacterInput,
   type CreateLocationInput,
+  type CreatePlayerInput,
   type CreateRelationshipInput,
   type CreateSaveInput,
   type CreateTurnInput,
+  type GeneratedWorldDraft,
+  type JobFailure,
+  type LlmCallSummary,
   type Location,
   type LocationPatch,
   type ModelConfig,
+  type ModelConfigUpdate,
   type PatchTurnDraftInput,
+  type PlayerInput,
+  type PlayerInputStatus,
+  type ReviewPlayerInput,
   type Relationship,
   type RelationshipPatch,
   type Save,
+  type SaveAccess,
+  type SaveCollaborator,
   type SaveGenerationJob,
   type SaveListItem,
   type StateChange,
   type Turn,
+  type TurnOrchestrationOutput,
   type TurnJob,
+  type UpsertSaveCollaboratorInput,
+  type User,
   type WorldMemory
 } from "@fantasy-world/shared";
 import * as dbSchema from "../db/schema.js";
@@ -30,12 +43,15 @@ import {
   buildSave,
   buildTurnDraft,
   defaultModelConfig,
+  defaultUser,
   id,
   isActiveJobStatus,
+  mergeModelCredentials,
   now,
-  patchTurnJobDraft
+  patchTurnJobDraft,
+  publicSaveModelConfig
 } from "./prototype-store.js";
-import type { FantasyWorldStore, ModelCredentials } from "./types.js";
+import type { FantasyWorldStore, ModelCredentials, ModelCredentialsScope } from "./types.js";
 
 type Database = NodePgDatabase<typeof dbSchema>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -49,12 +65,37 @@ export class DatabaseStore implements FantasyWorldStore {
     private readonly encryptionKey: string
   ) {}
 
-  async createSession(): Promise<string> {
+  async getOrCreateUser(username: string): Promise<User> {
+    const normalized = normalizeUsername(username);
+    const existing = await this.db.query.users.findFirst({
+      where: eq(dbSchema.users.username, normalized)
+    });
+
+    if (existing) {
+      return rowToUser(existing);
+    }
+
+    const user: User = {
+      id: normalized === defaultUser.username ? defaultUser.id : id("user"),
+      username: normalized,
+      role: normalized === defaultUser.username ? "admin" : "player"
+    };
+
+    await this.db.insert(dbSchema.users).values({
+      ...user,
+      createdAt: new Date()
+    });
+
+    return structuredClone(user);
+  }
+
+  async createSession(userId = defaultUser.id): Promise<string> {
     const sessionId = id("session");
     const createdAt = new Date();
 
     await this.db.insert(dbSchema.sessions).values({
       id: sessionId,
+      userId,
       createdAt,
       expiresAt: new Date(createdAt.getTime() + sessionTtlMs)
     });
@@ -74,6 +115,27 @@ export class DatabaseStore implements FantasyWorldStore {
     return Boolean(row);
   }
 
+  async getSessionUser(sessionId: string | undefined): Promise<User | undefined> {
+    if (!sessionId) {
+      return undefined;
+    }
+
+    const row = await this.db.query.sessions.findFirst({
+      where: and(eq(dbSchema.sessions.id, sessionId), gt(dbSchema.sessions.expiresAt, new Date()))
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const userId = row.userId ?? defaultUser.id;
+    const user = await this.db.query.users.findFirst({
+      where: eq(dbSchema.users.id, userId)
+    });
+
+    return user ? rowToUser(user) : structuredClone(defaultUser);
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     await this.db.delete(dbSchema.sessions).where(eq(dbSchema.sessions.id, sessionId));
   }
@@ -89,34 +151,43 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const data = row.data as ModelConfig;
 
+    if (row.apiKeyCiphertext) {
+      decryptSecret(row.apiKeyCiphertext, this.encryptionKey);
+    }
+
     return structuredClone({
       ...data,
       hasApiKey: Boolean(row.apiKeyCiphertext) || data.hasApiKey
     });
   }
 
-  async getModelCredentials(): Promise<ModelCredentials> {
+  async getModelCredentials(scope: ModelCredentialsScope = {}): Promise<ModelCredentials> {
     const row = await this.db.query.modelConfigs.findFirst({
       where: eq(dbSchema.modelConfigs.id, modelConfigId)
     });
+    const config = row ? await this.getModelConfig() : structuredClone(defaultModelConfig);
+    const credentials: ModelCredentials = { ...config };
 
-    if (!row) {
-      return structuredClone(defaultModelConfig);
-    }
-
-    const config = await this.getModelConfig();
-    const credentials: ModelCredentials = {
-      ...config
-    };
-
-    if (row.apiKeyCiphertext) {
+    if (row?.apiKeyCiphertext) {
       credentials.apiKey = decryptSecret(row.apiKeyCiphertext, this.encryptionKey);
     }
 
-    return structuredClone(credentials);
+    const save = scope.saveId
+      ? await this.db.query.saves.findFirst({
+          where: eq(dbSchema.saves.id, scope.saveId)
+        })
+      : undefined;
+    const saveConfig = save?.modelConfig
+      ? normalizeSaveModelConfig(save.modelConfig as ModelConfig, Boolean(save.modelApiKeyCiphertext))
+      : undefined;
+    const saveApiKey = save?.modelApiKeyCiphertext
+      ? decryptSecret(save.modelApiKeyCiphertext, this.encryptionKey)
+      : undefined;
+
+    return structuredClone(mergeModelCredentials(credentials, saveConfig, saveApiKey, scope.modelOverride));
   }
 
-  async updateModelConfig(input: Partial<ModelConfig> & { apiKey?: string }): Promise<ModelConfig> {
+  async updateModelConfig(input: ModelConfigUpdate): Promise<ModelConfig> {
     const existing = await this.db.query.modelConfigs.findFirst({
       where: eq(dbSchema.modelConfigs.id, modelConfigId)
     });
@@ -156,47 +227,434 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.getModelConfig();
   }
 
-  async listSaves(): Promise<SaveListItem[]> {
-    const [saveRows, characterRows] = await Promise.all([
+  async getSaveModelConfig(saveId: string): Promise<ModelConfig | undefined> {
+    const row = await this.db.query.saves.findFirst({
+      where: eq(dbSchema.saves.id, saveId)
+    });
+
+    if (!row?.modelConfig) {
+      return undefined;
+    }
+
+    if (row.modelApiKeyCiphertext) {
+      decryptSecret(row.modelApiKeyCiphertext, this.encryptionKey);
+    }
+
+    return structuredClone(
+      normalizeSaveModelConfig(row.modelConfig as ModelConfig, Boolean(row.modelApiKeyCiphertext))
+    );
+  }
+
+  async updateSaveModelConfig(saveId: string, input: ModelConfigUpdate): Promise<Save | undefined> {
+    const current = await this.readSave(saveId);
+
+    if (!current) {
+      return undefined;
+    }
+
+    const row = await this.db.query.saves.findFirst({
+      where: eq(dbSchema.saves.id, saveId)
+    });
+    const { apiKey, ...modelInput } = input;
+    const cleanApiKey = apiKey?.trim();
+    const base = current.modelConfig ?? publicSaveModelConfig(await this.getModelConfig());
+    const apiKeyCiphertext = cleanApiKey ? encryptSecret(cleanApiKey, this.encryptionKey) : row?.modelApiKeyCiphertext;
+    const nextModelConfig: ModelConfig = normalizeSaveModelConfig(
+      {
+        ...base,
+        ...modelInput,
+        hasApiKey: Boolean(cleanApiKey) || Boolean(apiKeyCiphertext),
+        supportsJsonMode: modelInput.supportsJsonMode ?? base.supportsJsonMode ?? true,
+        supportsUsage: modelInput.supportsUsage ?? base.supportsUsage ?? true,
+        supportsStream: modelInput.supportsStream ?? base.supportsStream ?? false
+      },
+      Boolean(apiKeyCiphertext)
+    );
+
+    if (cleanApiKey) {
+      nextModelConfig.apiKeyTail = cleanApiKey.slice(-4);
+    }
+
+    const updated: Save = {
+      ...current,
+      modelConfig: nextModelConfig,
+      updatedAt: now()
+    };
+
+    await this.db
+      .update(dbSchema.saves)
+      .set({
+        modelConfig: nextModelConfig,
+        modelApiKeyCiphertext: apiKeyCiphertext ?? null,
+        updatedAt: new Date(updated.updatedAt)
+      })
+      .where(eq(dbSchema.saves.id, saveId));
+
+    return this.readSave(saveId);
+  }
+
+  async clearSaveModelConfig(saveId: string): Promise<Save | undefined> {
+    const current = await this.readSave(saveId);
+
+    if (!current) {
+      return undefined;
+    }
+
+    await this.db
+      .update(dbSchema.saves)
+      .set({
+        modelConfig: null,
+        modelApiKeyCiphertext: null,
+        updatedAt: new Date()
+      })
+      .where(eq(dbSchema.saves.id, saveId));
+
+    return this.readSave(saveId);
+  }
+
+  async listSaves(ownerUserId = defaultUser.id): Promise<SaveListItem[]> {
+    const [saveRows, characterRows, collaboratorRows] = await Promise.all([
       this.db.select().from(dbSchema.saves).orderBy(desc(dbSchema.saves.updatedAt)),
-      this.db.select({ saveId: dbSchema.characters.saveId }).from(dbSchema.characters)
+      this.db.select({ saveId: dbSchema.characters.saveId }).from(dbSchema.characters),
+      this.db
+        .select({ saveId: dbSchema.saveCollaborators.saveId })
+        .from(dbSchema.saveCollaborators)
+        .where(eq(dbSchema.saveCollaborators.userId, ownerUserId))
     ]);
     const characterCounts = new Map<string, number>();
+    const collaboratorSaveIds = new Set(collaboratorRows.map((row) => row.saveId));
 
     for (const row of characterRows) {
       characterCounts.set(row.saveId, (characterCounts.get(row.saveId) ?? 0) + 1);
     }
 
-    return saveRows.map((save) => ({
-      id: save.id,
-      name: save.name,
-      description: save.description,
-      language: (save.settings as Save["settings"]).language,
-      turnNumber: save.turnNumber,
-      characterCount: characterCounts.get(save.id) ?? 0,
-      updatedAt: toIso(save.updatedAt)
-    }));
+    return saveRows
+      .filter((save) => ownerMatches(save.ownerUserId, ownerUserId) || collaboratorSaveIds.has(save.id))
+      .map((save) => ({
+        id: save.id,
+        ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
+        name: save.name,
+        description: save.description,
+        language: (save.settings as Save["settings"]).language,
+        turnNumber: save.turnNumber,
+        characterCount: characterCounts.get(save.id) ?? 0,
+        updatedAt: toIso(save.updatedAt)
+      }));
   }
 
-  async getSave(saveId: string): Promise<Save | undefined> {
-    return this.readSave(saveId);
+  async getSave(saveId: string, ownerUserId?: string): Promise<Save | undefined> {
+    const save = await this.readSave(saveId);
+    return save && (!ownerUserId || ownerMatches(save.ownerUserId, ownerUserId)) ? save : undefined;
   }
 
-  async createGenerationJob(input: CreateSaveInput): Promise<SaveGenerationJob> {
+  async getSaveAccess(saveId: string, userId: string): Promise<SaveAccess | undefined> {
+    const save = await this.db.query.saves.findFirst({
+      where: eq(dbSchema.saves.id, saveId)
+    });
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (ownerMatches(save.ownerUserId, userId)) {
+      return {
+        saveId,
+        userId,
+        role: "owner"
+      };
+    }
+
+    const collaborator = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!collaborator) {
+      return undefined;
+    }
+
+    return {
+      saveId,
+      userId,
+      role: normalizeCollaboratorRole(collaborator.role),
+      ...(collaborator.characterId ? { characterId: collaborator.characterId } : {})
+    };
+  }
+
+  async listCollaborators(saveId: string): Promise<SaveCollaborator[]> {
+    const [rows, users] = await Promise.all([
+      this.db.select().from(dbSchema.saveCollaborators).where(eq(dbSchema.saveCollaborators.saveId, saveId)),
+      this.db.select().from(dbSchema.users)
+    ]);
+    const usernames = new Map(users.map((user) => [user.id, user.username]));
+
+    return rows.map((row) => rowToCollaborator(row, usernames.get(row.userId) ?? row.userId));
+  }
+
+  async upsertCollaborator(
+    saveId: string,
+    user: User,
+    input: UpsertSaveCollaboratorInput
+  ): Promise<SaveCollaborator | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save || ownerMatches(save.ownerUserId, user.id)) {
+      return undefined;
+    }
+
+    const characterId = resolveCollaboratorCharacterId(save, input);
+
+    if (characterId === false) {
+      return undefined;
+    }
+
+    const existing = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, user.id))
+    });
+    const timestamp = new Date();
+
+    if (existing) {
+      await this.db
+        .update(dbSchema.saveCollaborators)
+        .set({
+          role: input.role,
+          characterId: characterId ?? null,
+          updatedAt: timestamp
+        })
+        .where(eq(dbSchema.saveCollaborators.id, existing.id));
+    } else {
+      await this.db.insert(dbSchema.saveCollaborators).values({
+        id: id("collaborator"),
+        saveId,
+        userId: user.id,
+        role: input.role,
+        characterId: characterId ?? null,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    }
+
+    return this.getCollaborator(saveId, user.id);
+  }
+
+  async patchCollaborator(
+    saveId: string,
+    userId: string,
+    input: Partial<UpsertSaveCollaboratorInput>
+  ): Promise<SaveCollaborator | undefined> {
+    const save = await this.readSave(saveId);
+    const existing = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!save || !existing) {
+      return undefined;
+    }
+
+    const nextRole = input.role ?? normalizeCollaboratorRole(existing.role);
+    const nextCharacterId = input.characterId ?? existing.characterId ?? undefined;
+    const characterId = resolveCollaboratorCharacterId(save, {
+      role: nextRole,
+      ...(nextCharacterId ? { characterId: nextCharacterId } : {})
+    });
+
+    if (characterId === false) {
+      return undefined;
+    }
+
+    await this.db
+      .update(dbSchema.saveCollaborators)
+      .set({
+        role: nextRole,
+        characterId: characterId ?? null,
+        updatedAt: new Date()
+      })
+      .where(eq(dbSchema.saveCollaborators.id, existing.id));
+
+    return this.getCollaborator(saveId, userId);
+  }
+
+  async removeCollaborator(saveId: string, userId: string): Promise<boolean> {
+    const existing = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!existing) {
+      return false;
+    }
+
+    await this.db.delete(dbSchema.saveCollaborators).where(eq(dbSchema.saveCollaborators.id, existing.id));
+    return true;
+  }
+
+  async createPlayerInput(saveId: string, user: User, input: CreatePlayerInput): Promise<PlayerInput | undefined> {
+    const access = await this.getSaveAccess(saveId, user.id);
+    const save = await this.readSave(saveId);
+
+    if (!save || access?.role !== "player" || !access.characterId) {
+      return undefined;
+    }
+
+    if (!save.characters.some((character) => character.id === access.characterId)) {
+      return undefined;
+    }
+
+    const createdAt = now();
+    const playerInput: PlayerInput = {
+      id: id("player_input"),
+      saveId,
+      userId: user.id,
+      username: user.username,
+      characterId: access.characterId,
+      intent: input.intent,
+      status: "pending",
+      createdAt
+    };
+
+    await this.db.insert(dbSchema.playerInputs).values({
+      id: playerInput.id,
+      saveId,
+      userId: user.id,
+      characterId: access.characterId,
+      status: playerInput.status,
+      data: playerInput,
+      createdAt: new Date(createdAt),
+      updatedAt: new Date(createdAt)
+    });
+
+    return structuredClone(playerInput);
+  }
+
+  async listPlayerInputs(saveId: string, userId?: string, status?: PlayerInputStatus): Promise<PlayerInput[]> {
+    const rows = await this.db.select().from(dbSchema.playerInputs).where(eq(dbSchema.playerInputs.saveId, saveId));
+
+    return rows
+      .map((row) => row.data as PlayerInput)
+      .filter((input) => (!userId || input.userId === userId) && (!status || input.status === status))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((input) => structuredClone(input));
+  }
+
+  async getPlayerInput(inputId: string): Promise<PlayerInput | undefined> {
+    const row = await this.db.query.playerInputs.findFirst({
+      where: eq(dbSchema.playerInputs.id, inputId)
+    });
+
+    return row ? structuredClone(row.data as PlayerInput) : undefined;
+  }
+
+  async reviewPlayerInput(
+    inputId: string,
+    reviewerUserId: string,
+    input: ReviewPlayerInput
+  ): Promise<PlayerInput | undefined> {
+    const row = await this.db.query.playerInputs.findFirst({
+      where: eq(dbSchema.playerInputs.id, inputId)
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const current = row.data as PlayerInput;
+
+    if (current.status === "used") {
+      return undefined;
+    }
+
+    const reviewed: PlayerInput = {
+      ...current,
+      status: input.status,
+      reviewedByUserId: reviewerUserId,
+      reviewedAt: now(),
+      ...(input.reviewNote ? { reviewNote: input.reviewNote } : {})
+    };
+
+    await this.db
+      .update(dbSchema.playerInputs)
+      .set({ status: reviewed.status, data: reviewed, updatedAt: new Date() })
+      .where(eq(dbSchema.playerInputs.id, inputId));
+
+    return structuredClone(reviewed);
+  }
+
+  async markPlayerInputsUsed(saveId: string, inputIds: string[], turnJobId: string): Promise<void> {
+    const ids = new Set(inputIds);
+    const rows = await this.db.select().from(dbSchema.playerInputs).where(eq(dbSchema.playerInputs.saveId, saveId));
+
+    await this.db.transaction(async (tx) => {
+      for (const row of rows) {
+        const input = row.data as PlayerInput;
+
+        if (!ids.has(input.id) || input.status !== "approved") {
+          continue;
+        }
+
+        const used: PlayerInput = {
+          ...input,
+          status: "used",
+          turnJobId
+        };
+
+        await tx
+          .update(dbSchema.playerInputs)
+          .set({ status: used.status, data: used, updatedAt: new Date() })
+          .where(eq(dbSchema.playerInputs.id, row.id));
+      }
+    });
+  }
+
+  async createQueuedGenerationJob(input: CreateSaveInput, ownerUserId = defaultUser.id): Promise<SaveGenerationJob> {
     if (input.idempotencyKey) {
-      const existing = await this.findGenerationJobByIdempotencyKey(input.idempotencyKey);
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
 
       if (existing) {
         return existing;
       }
     }
 
-    const save = buildSave(input);
     const job: SaveGenerationJob = {
       id: id("generation_job"),
+      ownerUserId,
+      status: "queued",
+      phase: "queued",
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input
+    };
+
+    await this.db.insert(dbSchema.saveGenerationJobs).values({
+      id: job.id,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
+  async createGenerationJob(
+    input: CreateSaveInput,
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary,
+    ownerUserId = defaultUser.id
+  ): Promise<SaveGenerationJob> {
+    if (input.idempotencyKey) {
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const save = { ...buildSave(input, generatedDraft), ownerUserId };
+    const job: SaveGenerationJob = {
+      id: id("generation_job"),
+      ownerUserId,
       status: "needs_review",
       phase: "ready_for_review",
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input,
+      ...(llmCall ? { llmCall } : {}),
       draft: {
         id: id("draft"),
         input,
@@ -216,12 +674,144 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(job);
   }
 
-  async getGenerationJob(jobId: string): Promise<SaveGenerationJob | undefined> {
+  async createFailedGenerationJob(
+    input: CreateSaveInput,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary,
+    ownerUserId = defaultUser.id
+  ): Promise<SaveGenerationJob> {
+    if (input.idempotencyKey) {
+      const existing = await this.getGenerationJobByIdempotencyKey(input.idempotencyKey, ownerUserId);
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const job: SaveGenerationJob = {
+      id: id("generation_job"),
+      ownerUserId,
+      status: "failed",
+      phase: failure.phase,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      input,
+      ...(llmCall ? { llmCall } : {}),
+      error: failure.message,
+      failure
+    };
+
+    await this.db.insert(dbSchema.saveGenerationJobs).values({
+      id: job.id,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
+  async getGenerationJob(jobId: string, ownerUserId?: string): Promise<SaveGenerationJob | undefined> {
     const row = await this.db.query.saveGenerationJobs.findFirst({
       where: eq(dbSchema.saveGenerationJobs.id, jobId)
     });
 
-    return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
+    const job = row ? (row.data as SaveGenerationJob) : undefined;
+    return job && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId)) ? structuredClone(job) : undefined;
+  }
+
+  async listActiveGenerationJobs(): Promise<SaveGenerationJob[]> {
+    const rows = await this.db.select().from(dbSchema.saveGenerationJobs);
+
+    return rows
+      .map((row) => row.data as SaveGenerationJob)
+      .filter((job) => isActiveJobStatus(job.status))
+      .map((job) => structuredClone(job));
+  }
+
+  async startGenerationJob(jobId: string, phase: string): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+
+    if (!job || job.status !== "queued") {
+      return job;
+    }
+
+    const running: SaveGenerationJob = {
+      ...job,
+      status: "running",
+      phase
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: running.status, data: running, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(running);
+  }
+
+  async completeGenerationJob(
+    jobId: string,
+    generatedDraft: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+    const input = job?.input ?? job?.draft?.input;
+
+    if (!job || !input || job.status === "cancelled" || job.status === "accepted") {
+      return undefined;
+    }
+
+    const completed: SaveGenerationJob = {
+      id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
+      status: "needs_review",
+      phase: "ready_for_review",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input,
+      ...(llmCall ? { llmCall } : {}),
+      draft: {
+        id: id("draft"),
+        input,
+        save: { ...buildSave(input, generatedDraft), ownerUserId: job.ownerUserId ?? defaultUser.id },
+        createdAt: now()
+      }
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: completed.status, data: completed, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(completed);
+  }
+
+  async failGenerationJob(
+    jobId: string,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    const failed: SaveGenerationJob = {
+      ...job,
+      status: "failed",
+      phase: failure.phase,
+      ...(llmCall ? { llmCall } : {}),
+      error: failure.message,
+      failure
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: failed.status, data: failed, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(failed);
   }
 
   async cancelGenerationJob(jobId: string): Promise<SaveGenerationJob | undefined> {
@@ -231,7 +821,7 @@ export class DatabaseStore implements FantasyWorldStore {
       return undefined;
     }
 
-    if (!isActiveJobStatus(job.status)) {
+    if (job.status === "cancelled" || job.status === "accepted") {
       return job;
     }
 
@@ -249,10 +839,15 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  async retryGenerationJob(jobId: string): Promise<SaveGenerationJob | undefined> {
+  async retryGenerationJob(
+    jobId: string,
+    generatedDraft?: GeneratedWorldDraft,
+    llmCall?: LlmCallSummary
+  ): Promise<SaveGenerationJob | undefined> {
     const job = await this.getGenerationJob(jobId);
+    const input = job?.input ?? job?.draft?.input;
 
-    if (!job?.draft) {
+    if (!job || !input) {
       return undefined;
     }
 
@@ -262,13 +857,16 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const retried: SaveGenerationJob = {
       id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
       status: "needs_review",
       phase: "ready_for_review",
       ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input,
+      ...(llmCall ? { llmCall } : {}),
       draft: {
-        ...job.draft,
         id: id("draft"),
-        save: buildSave(job.draft.input),
+        input,
+        save: { ...buildSave(input, generatedDraft), ownerUserId: job.ownerUserId ?? defaultUser.id },
         createdAt: now()
       }
     };
@@ -281,10 +879,44 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(retried);
   }
 
-  async acceptGenerationJob(jobId: string): Promise<Save | undefined> {
+  async queueGenerationRetry(jobId: string): Promise<SaveGenerationJob | undefined> {
+    const job = await this.getGenerationJob(jobId);
+    const input = job?.input ?? job?.draft?.input;
+
+    if (!job || !input) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return job;
+    }
+
+    const queued: SaveGenerationJob = {
+      id: job.id,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
+      status: "queued",
+      phase: "queued",
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {}),
+      input
+    };
+
+    await this.db
+      .update(dbSchema.saveGenerationJobs)
+      .set({ status: queued.status, data: queued, updatedAt: new Date() })
+      .where(eq(dbSchema.saveGenerationJobs.id, jobId));
+
+    return structuredClone(queued);
+  }
+
+  async acceptGenerationJob(jobId: string, ownerUserId?: string): Promise<Save | undefined> {
     const job = await this.getGenerationJob(jobId);
 
-    if (!job?.draft || job.status === "cancelled" || job.status === "failed") {
+    if (
+      !job?.draft ||
+      job.status === "cancelled" ||
+      job.status === "failed" ||
+      (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId))
+    ) {
       return undefined;
     }
 
@@ -309,8 +941,9 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(accepted.id);
   }
 
-  async importSave(input: Save): Promise<Save> {
+  async importSave(input: Save, ownerUserId = defaultUser.id): Promise<Save> {
     const save = remapImportedSave(input);
+    save.ownerUserId = ownerUserId;
 
     await this.insertSave(this.db, save);
 
@@ -563,7 +1196,12 @@ export class DatabaseStore implements FantasyWorldStore {
     return this.readSave(saveId);
   }
 
-  async createTurnJob(saveId: string, input: CreateTurnInput): Promise<TurnJob | undefined> {
+  async createTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
     const save = await this.readSave(saveId);
 
     if (!save) {
@@ -571,20 +1209,32 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     if (input.idempotencyKey) {
-      const existing = await this.findTurnJobByIdempotencyKey(saveId, input.idempotencyKey);
+      const existing = await this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
 
       if (existing) {
         return existing;
       }
     }
 
-    const active = await this.findActiveTurnJob(saveId);
+    const active = await this.getActiveTurnJob(saveId);
 
     if (active) {
       return active;
     }
 
-    const { job } = buildTurnDraft(save, input, (await this.getModelConfig()).model);
+    const { job } = buildTurnDraft(
+      save,
+      input,
+      (await this.getModelCredentials({ saveId })).model,
+      undefined,
+      undefined,
+      orchestration,
+      llmCall
+    );
 
     await this.db.transaction(async (tx) => {
       await tx.insert(dbSchema.turnJobs).values({
@@ -598,6 +1248,204 @@ export class DatabaseStore implements FantasyWorldStore {
     });
 
     return structuredClone(job);
+  }
+
+  async createQueuedTurnJob(saveId: string, input: CreateTurnInput): Promise<TurnJob | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (input.idempotencyKey) {
+      const existing = await this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const active = await this.getActiveTurnJob(saveId);
+
+    if (active) {
+      return active;
+    }
+
+    const job: TurnJob = {
+      id: id("turn_job"),
+      saveId,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
+      status: "queued",
+      phase: "queued",
+      input,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {})
+    };
+
+    await this.db.insert(dbSchema.turnJobs).values({
+      id: job.id,
+      saveId,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
+  async createFailedTurnJob(
+    saveId: string,
+    input: CreateTurnInput,
+    failure: JobFailure,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
+    const save = await this.readSave(saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    if (input.idempotencyKey) {
+      const existing = await this.getTurnJobByIdempotencyKey(
+        saveId,
+        input.idempotencyKey,
+        save.ownerUserId ?? defaultUser.id
+      );
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const active = await this.getActiveTurnJob(saveId);
+
+    if (active) {
+      return active;
+    }
+
+    const job: TurnJob = {
+      id: id("turn_job"),
+      saveId,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
+      status: "failed",
+      phase: failure.phase,
+      input,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(llmCall ? { llmCall } : {}),
+      error: failure.message,
+      failure
+    };
+
+    await this.db.insert(dbSchema.turnJobs).values({
+      id: job.id,
+      saveId,
+      status: job.status,
+      data: job,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    return structuredClone(job);
+  }
+
+  async listActiveTurnJobs(): Promise<TurnJob[]> {
+    const rows = await this.db.select().from(dbSchema.turnJobs);
+
+    return rows
+      .map((row) => row.data as TurnJob)
+      .filter((job) => isActiveJobStatus(job.status))
+      .map((job) => structuredClone(job));
+  }
+
+  async startTurnJob(jobId: string, phase: string): Promise<TurnJob | undefined> {
+    const job = await this.getTurnJob(jobId);
+
+    if (!job || job.status !== "queued") {
+      return job;
+    }
+
+    const running: TurnJob = {
+      ...job,
+      status: "running",
+      phase
+    };
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: running.status, data: running, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(running);
+  }
+
+  async completeTurnJob(
+    jobId: string,
+    orchestration: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
+    const job = await this.getTurnJob(jobId);
+
+    if (!job || job.status === "cancelled" || job.status === "accepted") {
+      return undefined;
+    }
+
+    const save = await this.readSave(job.saveId);
+
+    if (!save) {
+      return undefined;
+    }
+
+    const { job: completed } = buildTurnDraft(
+      save,
+      job.input ?? {},
+      (await this.getModelCredentials({ saveId: job.saveId })).model,
+      job.id,
+      job.idempotencyKey,
+      orchestration,
+      llmCall
+    );
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: completed.status, data: completed, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(completed);
+  }
+
+  async failTurnJob(jobId: string, failure: JobFailure, llmCall?: LlmCallSummary): Promise<TurnJob | undefined> {
+    const row = await this.db.query.turnJobs.findFirst({
+      where: eq(dbSchema.turnJobs.id, jobId)
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const job = row.data as TurnJob;
+    const failed: TurnJob = {
+      ...job,
+      status: "failed",
+      phase: failure.phase,
+      ...(llmCall ? { llmCall } : {}),
+      error: failure.message,
+      failure
+    };
+
+    if (job.turn) {
+      failed.turn = { ...job.turn, status: "failed" };
+    }
+
+    await this.db
+      .update(dbSchema.turnJobs)
+      .set({ status: failed.status, data: failed, updatedAt: new Date() })
+      .where(eq(dbSchema.turnJobs.id, jobId));
+
+    return structuredClone(failed);
   }
 
   async patchTurnDraft(jobId: string, input: PatchTurnDraftInput): Promise<TurnJob | undefined> {
@@ -634,7 +1482,7 @@ export class DatabaseStore implements FantasyWorldStore {
 
     const job = row.data as TurnJob;
 
-    if (!isActiveJobStatus(job.status)) {
+    if (job.status === "cancelled" || job.status === "accepted") {
       return structuredClone(job);
     }
 
@@ -669,7 +1517,11 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(cancelled);
   }
 
-  async retryTurnJob(jobId: string): Promise<TurnJob | undefined> {
+  async retryTurnJob(
+    jobId: string,
+    orchestration?: TurnOrchestrationOutput,
+    llmCall?: LlmCallSummary
+  ): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
     });
@@ -693,9 +1545,11 @@ export class DatabaseStore implements FantasyWorldStore {
     const { job: retried } = buildTurnDraft(
       save,
       job.input ?? {},
-      (await this.getModelConfig()).model,
+      (await this.getModelCredentials({ saveId: job.saveId })).model,
       job.id,
-      job.idempotencyKey
+      job.idempotencyKey,
+      orchestration,
+      llmCall
     );
 
     await this.db.transaction(async (tx) => {
@@ -712,7 +1566,42 @@ export class DatabaseStore implements FantasyWorldStore {
     return structuredClone(retried);
   }
 
-  async acceptTurn(turnId: string): Promise<Save | undefined> {
+  async queueTurnRetry(jobId: string): Promise<TurnJob | undefined> {
+    const job = await this.getTurnJob(jobId);
+
+    if (!job) {
+      return undefined;
+    }
+
+    if (isActiveJobStatus(job.status) || job.status === "accepted") {
+      return job;
+    }
+
+    const queued: TurnJob = {
+      id: job.id,
+      saveId: job.saveId,
+      ...(job.ownerUserId ? { ownerUserId: job.ownerUserId } : {}),
+      status: "queued",
+      phase: "queued",
+      input: job.input ?? {},
+      ...(job.idempotencyKey ? { idempotencyKey: job.idempotencyKey } : {})
+    };
+
+    await this.db.transaction(async (tx) => {
+      if (job.turn) {
+        await tx.delete(dbSchema.turns).where(eq(dbSchema.turns.id, job.turn.id));
+      }
+
+      await tx
+        .update(dbSchema.turnJobs)
+        .set({ status: queued.status, data: queued, updatedAt: new Date() })
+        .where(eq(dbSchema.turnJobs.id, jobId));
+    });
+
+    return structuredClone(queued);
+  }
+
+  async acceptTurn(turnId: string, ownerUserId?: string): Promise<Save | undefined> {
     const jobRows = await this.db.select().from(dbSchema.turnJobs);
     const jobRow = jobRows.find((row) => (row.data as TurnJob).turn?.id === turnId);
 
@@ -721,6 +1610,10 @@ export class DatabaseStore implements FantasyWorldStore {
     }
 
     const job = jobRow.data as TurnJob;
+
+    if (ownerUserId && !ownerMatches(job.ownerUserId, ownerUserId)) {
+      return undefined;
+    }
 
     if (job.status === "accepted") {
       return this.readSave(job.saveId);
@@ -766,10 +1659,15 @@ export class DatabaseStore implements FantasyWorldStore {
   }
 
   async rollbackSave(saveId: string): Promise<Save | undefined> {
-    const latestTurn = await this.db.query.turns.findFirst({
-      where: eq(dbSchema.turns.saveId, saveId),
-      orderBy: desc(dbSchema.turns.turnNumber)
-    });
+    const current = await this.readSave(saveId);
+    const latestTurn = current?.headTurnId
+      ? await this.db.query.turns.findFirst({
+          where: and(eq(dbSchema.turns.id, current.headTurnId), eq(dbSchema.turns.saveId, saveId))
+        })
+      : await this.db.query.turns.findFirst({
+          where: eq(dbSchema.turns.saveId, saveId),
+          orderBy: desc(dbSchema.turns.turnNumber)
+        });
 
     if (!latestTurn) {
       return undefined;
@@ -782,42 +1680,75 @@ export class DatabaseStore implements FantasyWorldStore {
     };
 
     await this.db.transaction(async (tx) => {
-      await tx
-        .delete(dbSchema.turns)
-        .where(and(eq(dbSchema.turns.saveId, saveId), gt(dbSchema.turns.turnNumber, snapshot.turnNumber)));
       await this.replaceSaveState(tx, restored);
     });
 
     return this.readSave(saveId);
   }
 
-  async getTurnJob(jobId: string): Promise<TurnJob | undefined> {
+  async getTurnJob(jobId: string, ownerUserId?: string): Promise<TurnJob | undefined> {
     const row = await this.db.query.turnJobs.findFirst({
       where: eq(dbSchema.turnJobs.id, jobId)
+    });
+
+    const job = row ? (row.data as TurnJob) : undefined;
+    return job && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId)) ? structuredClone(job) : undefined;
+  }
+
+  async getTurnJobByTurnId(turnId: string): Promise<TurnJob | undefined> {
+    const rows = await this.db.select().from(dbSchema.turnJobs);
+    const row = rows.find((item) => (item.data as TurnJob).turn?.id === turnId);
+    return row ? structuredClone(row.data as TurnJob) : undefined;
+  }
+
+  async getGenerationJobByIdempotencyKey(
+    idempotencyKey: string,
+    ownerUserId?: string
+  ): Promise<SaveGenerationJob | undefined> {
+    const rows = await this.db.select().from(dbSchema.saveGenerationJobs);
+    const row = rows.find((item) => {
+      const job = item.data as SaveGenerationJob;
+      return job.idempotencyKey === idempotencyKey && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId));
+    });
+
+    return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
+  }
+
+  async getTurnJobByIdempotencyKey(
+    saveId: string,
+    idempotencyKey: string,
+    ownerUserId?: string
+  ): Promise<TurnJob | undefined> {
+    const rows = await this.db.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, saveId));
+    const row = rows.find((item) => {
+      const job = item.data as TurnJob;
+      return job.idempotencyKey === idempotencyKey && (!ownerUserId || ownerMatches(job.ownerUserId, ownerUserId));
     });
 
     return row ? structuredClone(row.data as TurnJob) : undefined;
   }
 
-  private async findGenerationJobByIdempotencyKey(idempotencyKey: string): Promise<SaveGenerationJob | undefined> {
-    const rows = await this.db.select().from(dbSchema.saveGenerationJobs);
-    const row = rows.find((item) => (item.data as SaveGenerationJob).idempotencyKey === idempotencyKey);
-
-    return row ? structuredClone(row.data as SaveGenerationJob) : undefined;
-  }
-
-  private async findTurnJobByIdempotencyKey(saveId: string, idempotencyKey: string): Promise<TurnJob | undefined> {
-    const rows = await this.db.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, saveId));
-    const row = rows.find((item) => (item.data as TurnJob).idempotencyKey === idempotencyKey);
-
-    return row ? structuredClone(row.data as TurnJob) : undefined;
-  }
-
-  private async findActiveTurnJob(saveId: string): Promise<TurnJob | undefined> {
+  async getActiveTurnJob(saveId: string): Promise<TurnJob | undefined> {
     const rows = await this.db.select().from(dbSchema.turnJobs).where(eq(dbSchema.turnJobs.saveId, saveId));
     const row = rows.find((item) => isActiveJobStatus((item.data as TurnJob).status));
 
     return row ? structuredClone(row.data as TurnJob) : undefined;
+  }
+
+  private async getCollaborator(saveId: string, userId: string): Promise<SaveCollaborator | undefined> {
+    const row = await this.db.query.saveCollaborators.findFirst({
+      where: and(eq(dbSchema.saveCollaborators.saveId, saveId), eq(dbSchema.saveCollaborators.userId, userId))
+    });
+
+    if (!row) {
+      return undefined;
+    }
+
+    const user = await this.db.query.users.findFirst({
+      where: eq(dbSchema.users.id, userId)
+    });
+
+    return rowToCollaborator(row, user?.username ?? userId);
   }
 
   private async readSave(saveId: string): Promise<Save | undefined> {
@@ -837,17 +1768,25 @@ export class DatabaseStore implements FantasyWorldStore {
         .select()
         .from(dbSchema.turns)
         .where(eq(dbSchema.turns.saveId, saveId))
-        .orderBy(asc(dbSchema.turns.turnNumber))
+        .orderBy(asc(dbSchema.turns.turnNumber), asc(dbSchema.turns.createdAt))
     ]);
 
     return {
       id: save.id,
+      ...(save.ownerUserId ? { ownerUserId: save.ownerUserId } : {}),
       name: save.name,
       description: save.description,
       schemaVersion: CURRENT_SAVE_SCHEMA_VERSION,
       turnNumber: save.turnNumber,
+      ...(save.headTurnId ? { headTurnId: save.headTurnId } : {}),
+      ...(save.currentBranchId ? { currentBranchId: save.currentBranchId } : {}),
       saveSeed: save.saveSeed,
       settings: structuredClone(save.settings as Save["settings"]),
+      ...(save.modelConfig
+        ? {
+            modelConfig: normalizeSaveModelConfig(save.modelConfig as ModelConfig, Boolean(save.modelApiKeyCiphertext))
+          }
+        : {}),
       worldMemory: structuredClone(save.worldMemory as WorldMemory),
       characters: characters.map((row) => structuredClone(row.data as Character)),
       locations: locations.map((row) => structuredClone(row.data as Location)),
@@ -861,12 +1800,17 @@ export class DatabaseStore implements FantasyWorldStore {
   private async insertSave(db: Database | Transaction, save: Save) {
     await db.insert(dbSchema.saves).values({
       id: save.id,
+      ownerUserId: save.ownerUserId ?? null,
       name: save.name,
       description: save.description,
       schemaVersion: save.schemaVersion,
       turnNumber: save.turnNumber,
+      headTurnId: save.headTurnId ?? null,
+      currentBranchId: save.currentBranchId ?? null,
       saveSeed: save.saveSeed,
       settings: save.settings,
+      modelConfig: save.modelConfig ? normalizeSaveModelConfig(save.modelConfig, false) : null,
+      modelApiKeyCiphertext: null,
       worldMemory: save.worldMemory,
       createdAt: new Date(save.createdAt),
       updatedAt: new Date(save.updatedAt)
@@ -887,11 +1831,15 @@ export class DatabaseStore implements FantasyWorldStore {
       .update(dbSchema.saves)
       .set({
         name: save.name,
+        ownerUserId: save.ownerUserId ?? null,
         description: save.description,
         schemaVersion: save.schemaVersion,
         turnNumber: save.turnNumber,
+        headTurnId: save.headTurnId ?? null,
+        currentBranchId: save.currentBranchId ?? null,
         saveSeed: save.saveSeed,
         settings: save.settings,
+        modelConfig: save.modelConfig ?? null,
         worldMemory: save.worldMemory,
         updatedAt: new Date(save.updatedAt)
       })
@@ -992,6 +1940,7 @@ function remapImportedSave(input: Save): Save {
     ...turn,
     id: turnIds.get(turn.id) ?? id("turn"),
     saveId,
+    ...(turn.parentTurnId ? { parentTurnId: turnIds.get(turn.parentTurnId) ?? turn.parentTurnId } : {}),
     events: turn.events.map((event) => {
       const locationId = event.locationId ? (locationIds.get(event.locationId) ?? event.locationId) : undefined;
       const dialogue = event.dialogue?.map((line) => ({
@@ -1034,6 +1983,7 @@ function remapImportedSave(input: Save): Save {
   return {
     ...input,
     id: saveId,
+    ...(input.headTurnId ? { headTurnId: turnIds.get(input.headTurnId) ?? input.headTurnId } : {}),
     worldMemory: {
       ...input.worldMemory,
       locationSummaries
@@ -1047,10 +1997,22 @@ function remapImportedSave(input: Save): Save {
   };
 }
 
+function normalizeSaveModelConfig(input: ModelConfig, hasApiKey: boolean): ModelConfig {
+  const next: ModelConfig = {
+    ...input,
+    hasApiKey
+  };
+
+  if (!hasApiKey) {
+    delete next.apiKeyTail;
+  }
+
+  return next;
+}
+
 function buildSnapshotBeforeTurn(save: Save, turn: Turn): Save {
   const previousTurnNumber = Math.max(0, turn.turnNumber - 1);
-
-  return {
+  const snapshot: Save = {
     ...save,
     turnNumber: previousTurnNumber,
     worldMemory: {
@@ -1059,6 +2021,19 @@ function buildSnapshotBeforeTurn(save: Save, turn: Turn): Save {
     },
     turns: save.turns.filter((item) => item.turnNumber < turn.turnNumber)
   };
+
+  delete snapshot.headTurnId;
+  delete snapshot.currentBranchId;
+
+  if (turn.parentTurnId) {
+    snapshot.headTurnId = turn.parentTurnId;
+  }
+
+  if (turn.branchId) {
+    snapshot.currentBranchId = turn.branchId;
+  }
+
+  return snapshot;
 }
 
 function relationshipCharactersExist(save: Save, sourceCharacterId: string, targetCharacterId: string) {
@@ -1067,6 +2042,64 @@ function relationshipCharactersExist(save: Save, sourceCharacterId: string, targ
     save.characters.some((character) => character.id === sourceCharacterId) &&
     save.characters.some((character) => character.id === targetCharacterId)
   );
+}
+
+function rowToCollaborator(
+  row: {
+    saveId: string;
+    userId: string;
+    role: string;
+    characterId: string | null;
+    createdAt: Date | string;
+    updatedAt: Date | string;
+  },
+  username: string
+): SaveCollaborator {
+  return {
+    saveId: row.saveId,
+    userId: row.userId,
+    username,
+    role: normalizeCollaboratorRole(row.role),
+    ...(row.characterId ? { characterId: row.characterId } : {}),
+    createdAt: toIso(row.createdAt),
+    updatedAt: toIso(row.updatedAt)
+  };
+}
+
+function normalizeCollaboratorRole(role: string): SaveCollaborator["role"] {
+  return role === "gm" || role === "viewer" || role === "player" ? role : "viewer";
+}
+
+function resolveCollaboratorCharacterId(
+  save: Save,
+  input: Pick<UpsertSaveCollaboratorInput, "role" | "characterId">
+): string | false | undefined {
+  if (input.role !== "player") {
+    return undefined;
+  }
+
+  if (!input.characterId || !save.characters.some((character) => character.id === input.characterId)) {
+    return false;
+  }
+
+  return input.characterId;
+}
+
+function normalizeUsername(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized || defaultUser.username;
+}
+
+function ownerMatches(ownerUserId: string | null | undefined, requestedUserId: string) {
+  return (ownerUserId ?? defaultUser.id) === requestedUserId;
+}
+
+function rowToUser(row: { id: string; username: string; role: string }): User {
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role === "admin" ? "admin" : "player"
+  };
 }
 
 function toIso(value: Date | string) {

@@ -13,7 +13,8 @@
     "test": "pnpm --filter @fantasy-world/shared build && vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "auth:hash": "tsx scripts/hash-password.ts"
+    "auth:hash": "tsx scripts/hash-password.ts",
+    "keys:rotate": "tsx scripts/rotate-encryption-key.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

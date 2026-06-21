@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Compile } from "typebox/compile";
-import { CreateSaveInputSchema, SaveExportSchema, SaveSchema } from "./schemas.js";
+import { CreateSaveInputSchema, GeneratedWorldDraftSchema, SaveExportSchema, SaveSchema } from "./schemas.js";
 import { WORLD_TEMPLATES, createTemplateSaveInput } from "./templates.js";
 
 describe("SaveSchema", () => {
@@ -58,5 +58,55 @@ describe("world templates", () => {
     expect(input.characterSeeds.length).toBeGreaterThanOrEqual(3);
     expect(input.characterSeeds.length).toBeLessThanOrEqual(8);
     expect(check.Check(input)).toBe(true);
+  });
+});
+
+describe("GeneratedWorldDraftSchema", () => {
+  it("accepts the structured LLM world draft shape", () => {
+    const check = Compile(GeneratedWorldDraftSchema);
+
+    expect(
+      check.Check({
+        description: "A port city where omen bells predict disasters.",
+        worldSummary: "The city is split over who controls prophetic machinery.",
+        locations: [
+          {
+            name: "Clockwork Harbor",
+            description: "A brass-and-tide port full of omen bells.",
+            status: "The bells are ringing early."
+          }
+        ],
+        characters: ["Ada", "Bryn", "Cato"].map((name) => ({
+          name,
+          profile: `${name} is tied to the harbor crisis.`,
+          personality: "Driven and secretive",
+          longTermGoal: "Protect the harbor",
+          shortTermGoal: "Find the next clue",
+          locationName: "Clockwork Harbor",
+          status: "Available",
+          secrets: ["Knows one hidden clue"],
+          privateMemory: ["Remembers the bells ringing"]
+        })),
+        relationships: [
+          {
+            sourceCharacterName: "Ada",
+            targetCharacterName: "Bryn",
+            label: "Uneasy allies",
+            strength: 42,
+            summary: "They need each other but trade secrets carefully."
+          }
+        ]
+      })
+    ).toBe(true);
+
+    expect(
+      check.Check({
+        description: "Too small",
+        worldSummary: "No cast",
+        locations: [],
+        characters: [],
+        relationships: []
+      })
+    ).toBe(false);
   });
 });

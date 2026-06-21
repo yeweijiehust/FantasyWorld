@@ -1,6 +1,16 @@
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:crypto";
 
 const algorithm = "aes-256-gcm";
+export const secretDecryptionRecoveryMessage =
+  "Unable to decrypt stored model API key. Verify ENCRYPTION_KEY, restore the database backup taken before the key change, or run pnpm keys:rotate with the previous and new keys.";
+
+export class SecretDecryptionError extends Error {
+  constructor(cause?: unknown) {
+    super(secretDecryptionRecoveryMessage);
+    this.name = "SecretDecryptionError";
+    this.cause = cause;
+  }
+}
 
 export function isValidEncryptionKey(value: string | undefined) {
   return value ? decodeEncryptionKey(value) !== undefined : false;
@@ -17,17 +27,29 @@ export function encryptSecret(plaintext: string, keyValue: string) {
 }
 
 export function decryptSecret(payload: string, keyValue: string) {
-  const [version, iv, tag, ciphertext] = payload.split(":");
+  try {
+    const [version, iv, tag, ciphertext] = payload.split(":");
 
-  if (version !== "v1" || !iv || !tag || !ciphertext) {
-    throw new Error("Invalid encrypted secret payload");
+    if (version !== "v1" || !iv || !tag || !ciphertext) {
+      throw new Error("Invalid encrypted secret payload");
+    }
+
+    const key = resolveEncryptionKey(keyValue);
+    const decipher = createDecipheriv(algorithm, key, Buffer.from(iv, "base64url"));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+
+    return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
+  } catch (error) {
+    throw new SecretDecryptionError(error);
   }
+}
 
-  const key = resolveEncryptionKey(keyValue);
-  const decipher = createDecipheriv(algorithm, key, Buffer.from(iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag, "base64url"));
+export function rotateEncryptedSecret(payload: string, oldKey: string, newKey: string) {
+  return encryptSecret(decryptSecret(payload, oldKey), newKey);
+}
 
-  return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
+export function isSecretDecryptionError(error: unknown): boolean {
+  return error instanceof SecretDecryptionError;
 }
 
 function resolveEncryptionKey(value: string) {

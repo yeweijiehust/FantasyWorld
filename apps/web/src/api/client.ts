@@ -1,23 +1,31 @@
 import type {
   CharacterPatch,
+  CreatePlayerInput,
   CreateCharacterInput,
   CreateLocationInput,
   CreateRelationshipInput,
   CreateSaveInput,
   CreateTurnInput,
+  AppHealth,
+  LlmSmokeTestResult,
   LocationPatch,
   ModelConfig,
+  ModelHealth,
   ModelProbeInput,
   ModelProbeResult,
   PatchTurnDraftInput,
+  PlayerInput,
+  ReviewPlayerInput,
   RelationshipPatch,
   Save,
+  SaveCollaborator,
   SaveExport,
   SaveImport,
   SaveGenerationJob,
   SaveListItem,
   Session,
-  TurnJob
+  TurnJob,
+  UpsertSaveCollaboratorInput
 } from "@fantasy-world/shared";
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
@@ -48,13 +56,33 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
 
 export const api = {
   session: () => request<Session>("/api/auth/session"),
-  login: (password: string) => request<Session>("/api/auth/login", { method: "POST", body: { password } }),
+  login: (password: string, username = "admin") =>
+    request<Session>("/api/auth/login", { method: "POST", body: { username, password } }),
   logout: () => request<Session>("/api/auth/logout", { method: "POST" }),
+  health: () => request<AppHealth>("/api/health"),
   modelConfig: () => request<ModelConfig>("/api/model-config"),
+  modelHealth: () => request<ModelHealth>("/api/model-health"),
+  runModelSmokeTest: () => request<LlmSmokeTestResult>("/api/model-health/smoke-test", { method: "POST" }),
   updateModelConfig: (body: Partial<ModelConfig> & { apiKey?: string }) =>
     request<ModelConfig>("/api/model-config", { method: "PUT", body }),
   probeModelConfig: (body: ModelProbeInput) =>
     request<ModelProbeResult>("/api/model-config/probe", { method: "POST", body }),
+  saveModelConfig: (id: string) => request<ModelConfig>(`/api/saves/${id}/model-config`),
+  updateSaveModelConfig: (id: string, body: Partial<ModelConfig> & { apiKey?: string }) =>
+    request<Save>(`/api/saves/${id}/model-config`, { method: "PUT", body }),
+  clearSaveModelConfig: (id: string) => request<Save>(`/api/saves/${id}/model-config`, { method: "DELETE" }),
+  collaborators: (saveId: string) => request<SaveCollaborator[]>(`/api/saves/${saveId}/collaborators`),
+  upsertCollaborator: (saveId: string, body: UpsertSaveCollaboratorInput) =>
+    request<SaveCollaborator>(`/api/saves/${saveId}/collaborators`, { method: "POST", body }),
+  patchCollaborator: (saveId: string, userId: string, body: Partial<UpsertSaveCollaboratorInput>) =>
+    request<SaveCollaborator>(`/api/saves/${saveId}/collaborators/${userId}`, { method: "PATCH", body }),
+  removeCollaborator: (saveId: string, userId: string) =>
+    request<{ removed: boolean }>(`/api/saves/${saveId}/collaborators/${userId}`, { method: "DELETE" }),
+  playerInputs: (saveId: string) => request<PlayerInput[]>(`/api/saves/${saveId}/player-inputs`),
+  createPlayerInput: (saveId: string, body: CreatePlayerInput) =>
+    request<PlayerInput>(`/api/saves/${saveId}/player-inputs`, { method: "POST", body }),
+  reviewPlayerInput: (id: string, body: ReviewPlayerInput) =>
+    request<PlayerInput>(`/api/player-inputs/${id}/review`, { method: "POST", body }),
   saves: () => request<SaveListItem[]>("/api/saves"),
   save: (id: string) => request<Save>(`/api/saves/${id}`),
   patchSave: (id: string, body: Partial<Pick<Save, "name" | "description" | "settings" | "worldMemory">>) =>

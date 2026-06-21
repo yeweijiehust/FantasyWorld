@@ -22,7 +22,7 @@ API、SSE 回合进度流和 React 构建后的静态文件。第一版优先做
 - i18n：`react-i18next` 管 UI 中英切换；存档生成语言作为业务字段传给后端。
 - Database：Postgres + Drizzle ORM，使用显式迁移文件。
 - Local database：Docker Compose 提供本地 Postgres。
-- Auth：单用户密码门，HTTP-only cookie session。
+- Auth：HTTP-only cookie session；v1 单用户密码门，Post-v1 增加 username、save ownership 和协作角色。
 - Secrets：用户模型 API key 服务端加密后存 Postgres，前端只显示配置状态和尾号。
 - LLM：OpenAI-compatible 协议，用户配置 base URL、API key、model；使用 OpenAI SDK 薄封装。
 - Long jobs：创建存档和推进回合都使用任务表 + SSE，支持取消、重试和 idempotency key。
@@ -91,6 +91,8 @@ FantasyWorld/
 - `GET /api/auth/session`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
+- `GET /api/model-health`
+- `POST /api/model-health/smoke-test`
 - `GET /api/model-config`
 - `PUT /api/model-config`
 - `POST /api/model-config/probe`
@@ -112,6 +114,13 @@ FantasyWorld/
 - `PATCH /api/saves/:id/relationships/:relationshipId`
 - `DELETE /api/saves/:id/relationships/:relationshipId`
 - `PATCH /api/saves/:id/world-memory`
+- `GET /api/saves/:id/collaborators`
+- `POST /api/saves/:id/collaborators`
+- `PATCH /api/saves/:id/collaborators/:userId`
+- `DELETE /api/saves/:id/collaborators/:userId`
+- `GET /api/saves/:id/player-inputs`
+- `POST /api/saves/:id/player-inputs`
+- `POST /api/player-inputs/:id/review`
 - `POST /api/save-generation-jobs`
 - `GET /api/save-generation-jobs/:id`
 - `GET /api/save-generation-jobs/:id/events`
@@ -131,8 +140,12 @@ FantasyWorld/
 
 ## Database Model
 
-- 核心表：`saves`、`characters`、`locations`、`relationships`、`turns`、`turn_jobs`、`save_generation_jobs`、`model_configs`、`sessions`。
+- 核心表：`users`、`saves`、`save_collaborators`、`player_inputs`、`characters`、`locations`、`relationships`、`turns`、`turn_jobs`、`save_generation_jobs`、`model_configs`、`sessions`。
 - 核心对象使用关系表，便于查询、局部编辑和 UI 展示。
+- Post-v1 Step 10 引入 `users`、`saves.owner_user_id` 和 `sessions.user_id`；旧单管理员数据迁移到
+  `user_admin`，读取层仍把空 owner 当作默认 admin 兼容。
+- Post-v1 Step 11 引入 `save_collaborators` 和
+  `player_inputs`；协作者角色为 GM、Viewer、Player，Player 可绑定角色并提交待审核输入。
 - 每回合保存完整 JSONB snapshot，用于回滚、导入导出和调试。
 - 每个存档保存 `saveSeed`，每回合 snapshot 保存派生的 `turnSeed`，用于回滚、调试和测试复现。
 - 存档 JSON、回合 snapshot、prompt、schema 都记录版本；导入旧版本时运行迁移器，无法迁移时拒绝导入并返回明确错误。
@@ -161,17 +174,26 @@ FantasyWorld/
 
 ## Auth And Secrets
 
-- 第一版是单用户部署实例，不做注册、多用户和公开账号体系。
+- v1 是单用户部署实例；Post-v1 Step 10 引入轻量多用户身份、session-user 绑定和 save ownership。
+- 当前过渡认证仍使用部署级共享管理员密码，不做公开注册、邮箱验证或自助改密；不同 username 用于隔离存档 owner。
 - 管理员密码 hash 由 `pnpm auth:hash` 生成并通过 `ADMIN_PASSWORD_HASH` 提供，运行时不读取明文管理员密码。
 - 登录成功后发 HTTP-only cookie session，前端不保存 bearer token。
+- 用户只能访问自己 owner 或被授权协作的 save；owner/GM 可编辑和推进，Viewer 只读，Player 只能读取绑定角色范围并提交待审核输入。
+- 旧 owner 为空的数据按 `user_admin` 兼容；协作授权不赋予全局模型配置或新存档创建权限之外的额外系统权限。
 - 用户模型 API key 用 `ENCRYPTION_KEY` 加密后存 Postgres。
 - 前端读取模型配置时只显示 provider/base URL/model、是否已配置 key、key 尾号。
+- `ENCRYPTION_KEY` 手动轮换使用 `pnpm keys:rotate`，先 dry-run 解密所有已存模型 key，再在事务中重写全局和存档级密文。
+- 模型配置读取或 LLM 凭据读取遇到解密失败时返回 `secret_decryption_failed`，提示核对 key、恢复备份或重新执行轮换。
 
 ## LLM And Turn Jobs
 
 - 支持 OpenAI-compatible 接口：base URL、API key、model。
 - LLM SDK 层保持薄封装，负责请求、结构化输出、重试、token/耗时统计和错误归一。
 - 保存模型配置时执行连接和能力探测，记录 JSON mode、usage、stream 支持情况。
+- 设置页提供 app health、model health、最近 LLM 调用错误率/平均延迟和手动 live smoke test；无 API key 时 live smoke
+  test 明确 skipped。
+- LLM 近期指标为进程内滑动窗口，只记录 provider、model、成功/失败、错误摘要和 latency，不记录 prompt、raw output 或 API
+  key。
 - 不支持 JSON mode 时使用纯文本 JSON 约束 + 本地 TypeBox 校验重试。
 - 全局模型配置提供默认 API key、base URL 和 model；存档级覆盖可修改 base URL、model、随机性和内容偏好，API
   key 默认继承全局配置。
@@ -195,6 +217,7 @@ FantasyWorld/
 - 本地提供 `.env.example` 和 Docker Compose Postgres；真实 `.env`、`.env.*` 必须被 `.gitignore` 忽略，`.env.example`
   必须保留可提交。
 - 本地提供 `pnpm auth:hash` 生成管理员密码 hash，并在 `.env.example` 说明用法。
+- 本地提供 `pnpm keys:rotate` 执行 `ENCRYPTION_KEY` dry-run 和正式轮换，并在 `.env.example` 保留临时变量名。
 - GitHub remote：
   - GitHub 公开仓库已创建：`https://github.com/yeweijiehust/FantasyWorld.git`。
   - 本地 `origin` 已指向该仓库，当前 `main` 跟踪 `origin/main`。
@@ -211,6 +234,8 @@ FantasyWorld/
 - Render 连接 GitHub 仓库、填写生产环境变量和触发首次部署都由用户手动完成；项目实现侧只准备配置和提醒清单。
 - 用户完成 Render 连接后，`main` required checks 通过并合并会触发 Render 自动部署。
 - GitHub Actions 不直接调用 Render API，不在 GitHub Secrets 中保存 Render 部署密钥。
+- 生产备份、恢复演练和密钥轮换按 `plans/fantasyworld-backup-restore-runbook.md` 执行；正式轮换后由用户手动更新 Render
+  `ENCRYPTION_KEY` 并 redeploy。
 
 ## GitHub Actions
 

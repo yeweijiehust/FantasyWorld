@@ -17,6 +17,17 @@ export const JobStatusSchema = Type.Union([
 ]);
 export type JobStatus = Static<typeof JobStatusSchema>;
 
+export const JobFailureSchema = Type.Object({
+  code: Type.String({ minLength: 1 }),
+  message: Type.String({ minLength: 1 }),
+  phase: Type.String({ minLength: 1 }),
+  retryable: Type.Boolean(),
+  createdAt: Type.String(),
+  provider: Type.Optional(Type.String({ minLength: 1 })),
+  rawOutputSummary: Type.Optional(Type.String({ minLength: 1 }))
+});
+export type JobFailure = Static<typeof JobFailureSchema>;
+
 export const RelationshipSchema = Type.Object({
   id: IdSchema,
   sourceCharacterId: IdSchema,
@@ -88,9 +99,41 @@ export const ModelConfigSchema = Type.Object({
   apiKeyTail: Type.Optional(Type.String()),
   supportsJsonMode: Type.Optional(Type.Boolean()),
   supportsUsage: Type.Optional(Type.Boolean()),
-  supportsStream: Type.Optional(Type.Boolean())
+  supportsStream: Type.Optional(Type.Boolean()),
+  inputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 })),
+  outputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 }))
 });
 export type ModelConfig = Static<typeof ModelConfigSchema>;
+
+export const ModelConfigUpdateSchema = Type.Partial(
+  Type.Object({
+    baseUrl: Type.String(),
+    model: Type.String(),
+    apiKey: Type.String(),
+    supportsJsonMode: Type.Boolean(),
+    supportsUsage: Type.Boolean(),
+    supportsStream: Type.Boolean(),
+    inputTokenPriceUsdPerMillion: Type.Number({ minimum: 0 }),
+    outputTokenPriceUsdPerMillion: Type.Number({ minimum: 0 })
+  })
+);
+export type ModelConfigUpdate = Static<typeof ModelConfigUpdateSchema>;
+
+export const LlmCallSummarySchema = Type.Object({
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  model: Type.String(),
+  status: Type.Union([Type.Literal("succeeded"), Type.Literal("failed")]),
+  latencyMs: Type.Number({ minimum: 0 }),
+  estimatedTokens: Type.Number({ minimum: 0 }),
+  inputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  outputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  totalTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  estimatedUsage: Type.Optional(Type.Boolean()),
+  estimatedCostUsd: Type.Optional(Type.Number({ minimum: 0 })),
+  inputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 })),
+  outputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 }))
+});
+export type LlmCallSummary = Static<typeof LlmCallSummarySchema>;
 
 export const ModelProbeInputSchema = Type.Partial(
   Type.Object({
@@ -114,6 +157,139 @@ export const ModelProbeResultSchema = Type.Object({
   )
 });
 export type ModelProbeResult = Static<typeof ModelProbeResultSchema>;
+
+export const AppHealthSchema = Type.Object({
+  ok: Type.Boolean(),
+  app: Type.Object({
+    status: Type.Literal("ok")
+  })
+});
+export type AppHealth = Static<typeof AppHealthSchema>;
+
+export const LlmRecentMetricsSchema = Type.Object({
+  windowSize: Type.Number({ minimum: 0 }),
+  calls: Type.Number({ minimum: 0 }),
+  failures: Type.Number({ minimum: 0 }),
+  errorRate: Type.Number({ minimum: 0, maximum: 1 }),
+  averageLatencyMs: Type.Number({ minimum: 0 })
+});
+export type LlmRecentMetrics = Static<typeof LlmRecentMetricsSchema>;
+
+export const ModelHealthSchema = Type.Object({
+  status: Type.Union([Type.Literal("not_configured"), Type.Literal("ready"), Type.Literal("degraded")]),
+  hasApiKey: Type.Boolean(),
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  model: Type.String(),
+  lastCheckedAt: Type.Optional(Type.String()),
+  lastError: Type.Optional(
+    Type.Object({
+      code: Type.String(),
+      message: Type.String()
+    })
+  ),
+  recent: LlmRecentMetricsSchema
+});
+export type ModelHealth = Static<typeof ModelHealthSchema>;
+
+export const LlmSmokeTestResultSchema = Type.Object({
+  ok: Type.Boolean(),
+  status: Type.Union([Type.Literal("skipped"), Type.Literal("succeeded"), Type.Literal("failed")]),
+  provider: Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")]),
+  model: Type.String(),
+  latencyMs: Type.Optional(Type.Number({ minimum: 0 })),
+  message: Type.String(),
+  error: Type.Optional(
+    Type.Object({
+      code: Type.String(),
+      message: Type.String()
+    })
+  )
+});
+export type LlmSmokeTestResult = Static<typeof LlmSmokeTestResultSchema>;
+
+export const UserSchema = Type.Object({
+  id: IdSchema,
+  username: Type.String({ minLength: 1 }),
+  role: Type.Union([Type.Literal("admin"), Type.Literal("player")])
+});
+export type User = Static<typeof UserSchema>;
+
+export const SaveAccessRoleSchema = Type.Union([
+  Type.Literal("owner"),
+  Type.Literal("gm"),
+  Type.Literal("viewer"),
+  Type.Literal("player")
+]);
+export type SaveAccessRole = Static<typeof SaveAccessRoleSchema>;
+
+export const SaveAccessSchema = Type.Object({
+  saveId: IdSchema,
+  userId: IdSchema,
+  role: SaveAccessRoleSchema,
+  characterId: Type.Optional(IdSchema)
+});
+export type SaveAccess = Static<typeof SaveAccessSchema>;
+
+export const SaveCollaboratorSchema = Type.Object({
+  saveId: IdSchema,
+  userId: IdSchema,
+  username: Type.String({ minLength: 1 }),
+  role: Type.Union([Type.Literal("gm"), Type.Literal("viewer"), Type.Literal("player")]),
+  characterId: Type.Optional(IdSchema),
+  createdAt: Type.String(),
+  updatedAt: Type.String()
+});
+export type SaveCollaborator = Static<typeof SaveCollaboratorSchema>;
+
+export const UpsertSaveCollaboratorInputSchema = Type.Object({
+  username: Type.String({ minLength: 1 }),
+  role: Type.Union([Type.Literal("gm"), Type.Literal("viewer"), Type.Literal("player")]),
+  characterId: Type.Optional(IdSchema)
+});
+export type UpsertSaveCollaboratorInput = Static<typeof UpsertSaveCollaboratorInputSchema>;
+
+export const PatchSaveCollaboratorInputSchema = Type.Partial(
+  Type.Object({
+    role: Type.Union([Type.Literal("gm"), Type.Literal("viewer"), Type.Literal("player")]),
+    characterId: Type.Optional(IdSchema)
+  })
+);
+export type PatchSaveCollaboratorInput = Static<typeof PatchSaveCollaboratorInputSchema>;
+
+export const PlayerInputStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("approved"),
+  Type.Literal("rejected"),
+  Type.Literal("used")
+]);
+export type PlayerInputStatus = Static<typeof PlayerInputStatusSchema>;
+
+export const PlayerInputSchema = Type.Object({
+  id: IdSchema,
+  saveId: IdSchema,
+  userId: IdSchema,
+  username: Type.String({ minLength: 1 }),
+  characterId: IdSchema,
+  intent: Type.String({ minLength: 1 }),
+  status: PlayerInputStatusSchema,
+  createdAt: Type.String(),
+  reviewedByUserId: Type.Optional(IdSchema),
+  reviewedAt: Type.Optional(Type.String()),
+  reviewNote: Type.Optional(Type.String()),
+  turnJobId: Type.Optional(IdSchema)
+});
+export type PlayerInput = Static<typeof PlayerInputSchema>;
+
+export const CreatePlayerInputSchema = Type.Object({
+  intent: Type.String({ minLength: 1 })
+});
+export type CreatePlayerInput = Static<typeof CreatePlayerInputSchema>;
+
+export const ReviewPlayerInputSchema = Type.Object({
+  status: Type.Union([Type.Literal("approved"), Type.Literal("rejected")]),
+  reviewNote: Type.Optional(Type.String())
+});
+export type ReviewPlayerInput = Static<typeof ReviewPlayerInputSchema>;
 
 export const SaveSettingsSchema = Type.Object({
   language: LanguageSchema,
@@ -233,6 +409,8 @@ export type TurnOrchestrationOutput = Static<typeof TurnOrchestrationOutputSchem
 export const TurnSchema = Type.Object({
   id: IdSchema,
   saveId: IdSchema,
+  parentTurnId: Type.Optional(IdSchema),
+  branchId: Type.Optional(Type.String({ minLength: 1 })),
   turnNumber: Type.Number({ minimum: 1 }),
   status: JobStatusSchema,
   events: Type.Array(TurnEventSchema),
@@ -241,7 +419,16 @@ export const TurnSchema = Type.Object({
     model: Type.String(),
     calls: Type.Number({ minimum: 0 }),
     durationMs: Type.Number({ minimum: 0 }),
-    estimatedTokens: Type.Number({ minimum: 0 })
+    estimatedTokens: Type.Number({ minimum: 0 }),
+    provider: Type.Optional(Type.Union([Type.Literal("mock"), Type.Literal("openai-compatible")])),
+    status: Type.Optional(Type.Union([Type.Literal("succeeded"), Type.Literal("failed")])),
+    inputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+    outputTokens: Type.Optional(Type.Number({ minimum: 0 })),
+    totalTokens: Type.Optional(Type.Number({ minimum: 0 })),
+    estimatedUsage: Type.Optional(Type.Boolean()),
+    estimatedCostUsd: Type.Optional(Type.Number({ minimum: 0 })),
+    inputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 })),
+    outputTokenPriceUsdPerMillion: Type.Optional(Type.Number({ minimum: 0 }))
   }),
   createdAt: Type.String()
 });
@@ -249,12 +436,16 @@ export type Turn = Static<typeof TurnSchema>;
 
 export const SaveSchema = Type.Object({
   id: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   name: Type.String(),
   description: Type.String(),
   schemaVersion: Type.Literal(CURRENT_SAVE_SCHEMA_VERSION),
   turnNumber: Type.Number({ minimum: 0 }),
+  headTurnId: Type.Optional(IdSchema),
+  currentBranchId: Type.Optional(Type.String({ minLength: 1 })),
   saveSeed: Type.String(),
   settings: SaveSettingsSchema,
+  modelConfig: Type.Optional(ModelConfigSchema),
   worldMemory: WorldMemorySchema,
   characters: Type.Array(CharacterSchema),
   locations: Type.Array(LocationSchema),
@@ -282,8 +473,47 @@ export const SaveImportSchema = Type.Union([
 ]);
 export type SaveImport = Static<typeof SaveImportSchema>;
 
+export const GeneratedWorldDraftSchema = Type.Object({
+  description: Type.String({ minLength: 1 }),
+  worldSummary: Type.String({ minLength: 1 }),
+  locations: Type.Array(
+    Type.Object({
+      name: Type.String({ minLength: 1 }),
+      description: Type.String({ minLength: 1 }),
+      status: Type.String({ minLength: 1 })
+    }),
+    { minItems: 1, maxItems: 5 }
+  ),
+  characters: Type.Array(
+    Type.Object({
+      name: Type.String({ minLength: 1 }),
+      profile: Type.String({ minLength: 1 }),
+      personality: Type.String({ minLength: 1 }),
+      longTermGoal: Type.String({ minLength: 1 }),
+      shortTermGoal: Type.String({ minLength: 1 }),
+      locationName: Type.Optional(Type.String({ minLength: 1 })),
+      status: Type.String({ minLength: 1 }),
+      secrets: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 5 }),
+      privateMemory: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 8 })
+    }),
+    { minItems: 3, maxItems: 8 }
+  ),
+  relationships: Type.Array(
+    Type.Object({
+      sourceCharacterName: Type.String({ minLength: 1 }),
+      targetCharacterName: Type.String({ minLength: 1 }),
+      label: Type.String({ minLength: 1 }),
+      strength: Type.Number({ minimum: 0, maximum: 100 }),
+      summary: Type.String({ minLength: 1 })
+    }),
+    { maxItems: 16 }
+  )
+});
+export type GeneratedWorldDraft = Static<typeof GeneratedWorldDraftSchema>;
+
 export const SaveListItemSchema = Type.Object({
   id: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   name: Type.String(),
   description: Type.String(),
   language: LanguageSchema,
@@ -321,11 +551,15 @@ export type SaveGenerationDraft = Static<typeof SaveGenerationDraftSchema>;
 
 export const SaveGenerationJobSchema = Type.Object({
   id: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   status: JobStatusSchema,
   phase: Type.Optional(Type.String()),
   idempotencyKey: Type.Optional(Type.String()),
+  input: Type.Optional(CreateSaveInputSchema),
   draft: Type.Optional(SaveGenerationDraftSchema),
-  error: Type.Optional(Type.String())
+  llmCall: Type.Optional(LlmCallSummarySchema),
+  error: Type.Optional(Type.String()),
+  failure: Type.Optional(JobFailureSchema)
 });
 export type SaveGenerationJob = Static<typeof SaveGenerationJobSchema>;
 
@@ -377,13 +611,16 @@ export type PatchTurnDraftInput = Static<typeof PatchTurnDraftInputSchema>;
 export const TurnJobSchema = Type.Object({
   id: IdSchema,
   saveId: IdSchema,
+  ownerUserId: Type.Optional(IdSchema),
   status: JobStatusSchema,
   phase: Type.Optional(Type.String()),
   idempotencyKey: Type.Optional(Type.String()),
   input: Type.Optional(CreateTurnInputSchema),
   turn: Type.Optional(TurnSchema),
   draftState: Type.Optional(TurnDraftStateSchema),
-  error: Type.Optional(Type.String())
+  llmCall: Type.Optional(LlmCallSummarySchema),
+  error: Type.Optional(Type.String()),
+  failure: Type.Optional(JobFailureSchema)
 });
 export type TurnJob = Static<typeof TurnJobSchema>;
 
@@ -396,6 +633,7 @@ export const ApiErrorSchema = Type.Object({
 export type ApiError = Static<typeof ApiErrorSchema>;
 
 export const SessionSchema = Type.Object({
-  authenticated: Type.Boolean()
+  authenticated: Type.Boolean(),
+  user: Type.Optional(UserSchema)
 });
 export type Session = Static<typeof SessionSchema>;
