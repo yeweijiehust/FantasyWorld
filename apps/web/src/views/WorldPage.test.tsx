@@ -295,6 +295,111 @@ describe("WorldPage", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/world/save_1"));
   });
 
+  it("keeps draft generation visibly active until the job finishes", async () => {
+    const queuedJob = {
+      id: "generation_job_active",
+      status: "queued" as const,
+      phase: "queued",
+      input: {
+        templateId: "fantasy-frontier",
+        name: "Queued world",
+        premise: "A queued world",
+        characterSeeds: ["A", "B", "C"],
+        settings: makeSave().settings
+      }
+    };
+    const runningJob = {
+      ...queuedJob,
+      status: "running" as const,
+      phase: "generating_world_draft"
+    };
+    apiMock.createGenerationJob.mockResolvedValue(queuedJob);
+    apiMock.generationJob.mockResolvedValue(runningJob);
+    renderWithClient("create");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+
+    expect(await screen.findByText("Generating draft")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generating draft..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+
+  it("polls active draft generation until a failed terminal state", async () => {
+    const queuedJob = {
+      id: "generation_job_failed",
+      status: "queued" as const,
+      phase: "queued",
+      input: {
+        templateId: "fantasy-frontier",
+        name: "Timeout world",
+        premise: "A slow world",
+        characterSeeds: ["A", "B", "C"],
+        settings: makeSave().settings
+      }
+    };
+    const runningJob = {
+      ...queuedJob,
+      status: "running" as const,
+      phase: "generating_world_draft"
+    };
+    const failedJob = {
+      ...runningJob,
+      status: "failed" as const,
+      failure: {
+        code: "provider_timeout",
+        message: "The model generation request timed out before a response was returned"
+      },
+      error: "The model generation request timed out before a response was returned"
+    };
+    apiMock.createGenerationJob.mockResolvedValue(queuedJob);
+    apiMock.generationJob.mockResolvedValueOnce(runningJob).mockResolvedValue(failedJob);
+    renderWithClient("create");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+
+    expect(await screen.findByText("Generating draft")).toBeInTheDocument();
+    expect(await screen.findByText("Draft generation failed", {}, { timeout: 3500 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate draft" })).toBeEnabled();
+  });
+
+  it("prefers fetched generation job updates over the initial queued mutation result", async () => {
+    const save = makeSave();
+    const queuedJob = {
+      id: "generation_job_updated",
+      status: "queued" as const,
+      phase: "queued",
+      input: {
+        templateId: "fantasy-frontier",
+        name: save.name,
+        premise: save.description,
+        characterSeeds: ["A", "B", "C"],
+        settings: save.settings
+      }
+    };
+    const completedJob = {
+      ...queuedJob,
+      status: "needs_review" as const,
+      phase: "needs_review",
+      draft: {
+        id: "draft_1",
+        input: queuedJob.input,
+        save,
+        createdAt: "2026-06-21T00:00:00.000Z"
+      }
+    };
+    apiMock.createGenerationJob.mockResolvedValue(queuedJob);
+    apiMock.generationJob.mockResolvedValue(completedJob);
+    renderWithClient("create");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+
+    expect(await screen.findByText("Draft ready")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate draft" })).toBeDisabled();
+  });
+
   it("loads an existing save from the load page", async () => {
     const save = makeSave();
     const item: SaveListItem = {
