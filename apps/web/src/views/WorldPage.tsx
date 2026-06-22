@@ -187,7 +187,7 @@ export function CreateSavePage() {
     queryKey: ["generation-job", generationJobId],
     queryFn: () => api.generationJob(generationJobId ?? ""),
     enabled: Boolean(generationJobId),
-    refetchInterval: (query) => (isActiveJob(query.state.data as SaveGenerationJob | undefined) ? 2000 : false)
+    refetchInterval: (query) => (isActiveJob(query.state.data) ? 2000 : false)
   });
   const generation = useMutation({
     mutationFn: api.createGenerationJob,

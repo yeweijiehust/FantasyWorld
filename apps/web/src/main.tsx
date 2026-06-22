@@ -9,7 +9,8 @@ import { NavLinks } from "./shell/NavLinks.js";
 import { LoadSavePage } from "./views/LoadSavePage.js";
 import { SettingsPage } from "./views/SettingsPage.js";
 import { TitlePage } from "./views/TitlePage.js";
-import { CreateSavePage, WorldPage } from "./views/WorldPage.js";
+import { CreateSavePage } from "./views/WorldPage.js";
+import { WorldRoutePage } from "./views/WorldRoutePage.js";
 
 const queryClient = new QueryClient();
 
@@ -67,8 +68,3 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
-
-function WorldRoutePage() {
-  const { saveId } = worldRoute.useParams();
-  return <WorldPage saveId={saveId} />;
-}
