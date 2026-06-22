@@ -45,6 +45,10 @@ const defaultTemplateInput = createTemplateSaveInput("fantasy-frontier", "zh");
 const generationJobStorageKey = "fantasyworld.currentGenerationJob";
 const turnJobStorageKey = (saveId: string) => `fantasyworld.turnJob.${saveId}`;
 
+function isActiveJob(job?: Pick<SaveGenerationJob, "status">) {
+  return job?.status === "queued" || job?.status === "running";
+}
+
 type WizardValues = {
   templateId: string;
   language: Language;
@@ -182,7 +186,8 @@ export function CreateSavePage() {
   const generationJob = useQuery({
     queryKey: ["generation-job", generationJobId],
     queryFn: () => api.generationJob(generationJobId ?? ""),
-    enabled: Boolean(generationJobId)
+    enabled: Boolean(generationJobId),
+    refetchInterval: (query) => (isActiveJob(query.state.data) ? 2000 : false)
   });
   const generation = useMutation({
     mutationFn: api.createGenerationJob,
@@ -222,7 +227,10 @@ export function CreateSavePage() {
     }
   });
   const selectedTemplate = WORLD_TEMPLATES.find((template) => template.id === values.templateId) ?? WORLD_TEMPLATES[0];
-  const currentGenerationJob = generation.data ?? generationJob.data;
+  const currentGenerationJob = generationJob.data ?? generation.data;
+  const generationInProgress = isActiveJob(currentGenerationJob) || generation.isPending;
+  const generationHasDraft = Boolean(currentGenerationJob?.draft);
+  const canGenerateDraft = !generationInProgress && currentGenerationJob?.status !== "needs_review";
   const characterSeeds = seedText
     .split("\n")
     .map((seed) => seed.trim())
@@ -520,13 +528,38 @@ export function CreateSavePage() {
               <button
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-950 px-3 font-semibold text-white disabled:opacity-60"
                 type="button"
-                disabled={generation.isPending}
+                disabled={!canGenerateDraft}
                 onClick={generateDraft}
               >
                 <Sparkles size={16} />
-                {t("world.generateDraft")}
+                {generationInProgress ? t("world.generatingDraft") : t("world.generateDraft")}
               </button>
-              {currentGenerationJob?.draft ? (
+              {generationInProgress ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Clock3 size={16} />
+                    {currentGenerationJob?.status === "queued"
+                      ? t("world.generationQueued")
+                      : t("world.generationRunning")}
+                  </div>
+                  {currentGenerationJob?.phase ? (
+                    <div className="mt-1 text-sm text-amber-800">
+                      {t("world.generationPhase", { phase: currentGenerationJob.phase })}
+                    </div>
+                  ) : null}
+                  {currentGenerationJob ? (
+                    <button
+                      className="mt-3 h-8 rounded-md bg-white px-3 text-amber-900 disabled:opacity-60"
+                      type="button"
+                      disabled={cancelGeneration.isPending}
+                      onClick={() => cancelGeneration.mutate(currentGenerationJob.id)}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {currentGenerationJob?.draft && generationHasDraft ? (
                 <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
                   <div className="font-semibold">{t("world.draftReady")}</div>
                   <div className="mt-1 text-emerald-800">
