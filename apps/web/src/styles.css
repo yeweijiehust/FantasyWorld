@@ -10,6 +10,13 @@ body {
   margin: 0;
 }
 
+.title-screen {
+  background:
+    linear-gradient(90deg, rgb(8 13 24 / 0.92) 0%, rgb(8 13 24 / 0.74) 42%, rgb(8 13 24 / 0.26) 100%),
+    linear-gradient(0deg, rgb(8 13 24 / 0.72) 0%, rgb(8 13 24 / 0) 52%),
+    url("/fantasyworld-title.png") center / cover no-repeat;
+}
+
 button,
 input,
 textarea,

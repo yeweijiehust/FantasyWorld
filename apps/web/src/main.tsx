@@ -6,8 +6,10 @@ import "./i18n.js";
 import "./styles.css";
 import { AppShell } from "./shell/AppShell.js";
 import { NavLinks } from "./shell/NavLinks.js";
+import { LoadSavePage } from "./views/LoadSavePage.js";
 import { SettingsPage } from "./views/SettingsPage.js";
-import { WorldPage } from "./views/WorldPage.js";
+import { TitlePage } from "./views/TitlePage.js";
+import { CreateSavePage, WorldPage } from "./views/WorldPage.js";
 
 const queryClient = new QueryClient();
 
@@ -22,7 +24,25 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: WorldPage
+  component: TitlePage
+});
+
+const createRoutePage = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/create",
+  component: CreateSavePage
+});
+
+const loadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/load",
+  component: LoadSavePage
+});
+
+const worldRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/world/$saveId",
+  component: WorldRoutePage
 });
 
 const settingsRoute = createRoute({
@@ -31,7 +51,7 @@ const settingsRoute = createRoute({
   component: SettingsPage
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, createRoutePage, loadRoute, worldRoute, settingsRoute]);
 const router = createRouter({ routeTree });
 
 declare module "@tanstack/react-router" {
@@ -47,3 +67,8 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+function WorldRoutePage() {
+  const { saveId } = worldRoute.useParams();
+  return <WorldPage saveId={saveId} />;
+}

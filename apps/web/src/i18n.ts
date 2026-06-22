@@ -9,6 +9,8 @@ const resources = {
     translation: {
       nav: {
         world: "World",
+        title: "Title",
+        load: "Load",
         settings: "Settings",
         uiLanguage: "UI language",
         subtitle: "AI world simulation workbench",
@@ -30,10 +32,35 @@ const resources = {
         revise: "Revise",
         delete: "Delete"
       },
+      title: {
+        kicker: "LLM world simulation",
+        body: "Create a living fantasy save, load an existing world, then let the cast think, speak, and act through model-driven turns.",
+        createGame: "Create game",
+        loadSave: "Load save",
+        modelSettings: "Model settings"
+      },
+      load: {
+        kicker: "Saved worlds",
+        title: "Load save",
+        body: "Choose an existing world or import a save JSON file.",
+        importing: "Importing...",
+        updatedAt: "Updated {{date}}",
+        emptyTitle: "No saves yet",
+        emptyBody: "Create a new game or import a save JSON file to begin."
+      },
+      create: {
+        kicker: "New game",
+        body: "Set the world, cast, and rules step by step. The generated draft becomes playable only after you accept it.",
+        advancedSettings: "Advanced model override"
+      },
       world: {
         saves: "Saves",
         loadingSaves: "Loading saves...",
+        loadingSave: "Loading save...",
         noWorldSelected: "No world selected.",
+        saveLoadFailed: "Save could not be loaded",
+        backToTitle: "Back to title",
+        loadOtherSave: "Load other save",
         mobileDetails: "World details",
         turnSummary: "Turn {{turn}} · {{characters}} chars",
         createHeading: "New world",
@@ -124,6 +151,8 @@ const resources = {
     translation: {
       nav: {
         world: "世界",
+        title: "标题",
+        load: "加载",
         settings: "设置",
         uiLanguage: "界面语言",
         subtitle: "AI 世界推演工作台",
@@ -145,10 +174,35 @@ const resources = {
         revise: "修改",
         delete: "删除"
       },
+      title: {
+        kicker: "LLM 世界推演",
+        body: "创建一个会持续演化的幻想存档，或加载已有世界，让角色通过模型驱动的回合进行思考、对话和行动。",
+        createGame: "创建游戏",
+        loadSave: "加载存档",
+        modelSettings: "模型设置"
+      },
+      load: {
+        kicker: "已保存的世界",
+        title: "加载存档",
+        body: "选择已有世界，或导入一个存档 JSON 文件。",
+        importing: "导入中...",
+        updatedAt: "更新于 {{date}}",
+        emptyTitle: "还没有存档",
+        emptyBody: "创建一个新游戏，或导入存档 JSON 来开始。"
+      },
+      create: {
+        kicker: "新游戏",
+        body: "一步一步设置世界、角色与规则。生成的草稿只有在你接受后才会变成可游玩的存档。",
+        advancedSettings: "高级模型覆盖"
+      },
       world: {
         saves: "存档",
         loadingSaves: "正在加载存档...",
+        loadingSave: "正在加载存档...",
         noWorldSelected: "尚未选择世界。",
+        saveLoadFailed: "存档加载失败",
+        backToTitle: "回到标题",
+        loadOtherSave: "加载其他存档",
         mobileDetails: "世界详情",
         turnSummary: "第 {{turn}} 回合 · {{characters}} 名角色",
         createHeading: "新世界",
